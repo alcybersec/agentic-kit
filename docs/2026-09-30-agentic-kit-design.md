@@ -280,6 +280,19 @@ the same worktree lesson is recorded twice in this user's notes.
 
 Every one exits 0 when the lock is absent (§4.3).
 
+**Where the deny list stops.** It covers what a cooperative agent plausibly does *by reflex* and
+cannot undo: the staging sweep, the force push, the hard reset, the working-tree wipe
+(`git checkout -- .`, `git restore .`, `git clean`), the volume-deleting `down -v`, and deleting a
+remote branch. Each is listed in every spelling, because `Bash(x:*)` means `Bash(x *)` and the space
+is part of the rule — `Bash(git commit -a:*)` does **not** match `git commit -am "wip"`.
+
+Deliberately **not** denied: `git push --force-with-lease`, which refuses when the remote has moved
+and is the safe alternative the `--force` deny steers toward; `git branch -D`, recoverable from the
+reflog and required by the orchestrator's own worktree-merge protocol; and `git rebase`, which is
+legitimate on a trunk-based one-task-per-branch model. None of those three is in `allow` either, so
+they prompt. A rule earns its place by being both irreversible and reflexive; "destructive" alone
+would grow this list without end.
+
 **What the permission file and these hooks do NOT guarantee.** Both `.claude/settings.json` rules and
 these hooks match on **command strings**, so neither is a sandbox:
 

@@ -118,6 +118,24 @@ def test_working_tree_wipes_are_denied(entry, load_fixture):
     assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
 
 
+@pytest.mark.parametrize("entry", [
+    "Bash(git push --delete:*)", "Bash(git push -d:*)",
+])
+def test_remote_branch_deletion_is_denied(entry, load_fixture):
+    """Deleting a remote branch is outward-facing and not recoverable from here."""
+    assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
+
+
+def test_force_with_lease_is_deliberately_not_denied(load_fixture):
+    """`Bash(git push --force:*)` requires a space after --force, so
+    --force-with-lease is not matched. That is intended: force-with-lease refuses
+    when the remote has moved, so it is the safe alternative the deny rule should be
+    steering toward. Pinned so nobody "fixes" it into a broader rule."""
+    deny = settings(load_fixture("services_layout"))["permissions"]["deny"]
+    assert "Bash(git push --force:*)" in deny
+    assert not any("force-with-lease" in rule for rule in deny)
+
+
 def test_worktree_allow_is_narrowed_to_add_and_list(load_fixture):
     allow = settings(load_fixture("services_layout"))["permissions"]["allow"]
     assert "Bash(git worktree add:*)" in allow

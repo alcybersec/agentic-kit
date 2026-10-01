@@ -1349,27 +1349,33 @@ def test_settings_is_valid_json(load_fixture):
         assert settings(load_fixture(name))["permissions"]
 
 
-def test_every_secret_path_is_denied_for_read_edit_and_write(load_fixture):
+def test_every_secret_path_is_denied_for_read_and_edit(load_fixture):
     for name in FIXTURES:
         cfg = load_fixture(name)
         deny = settings(cfg)["permissions"]["deny"]
         for s in cfg.secrets:
-            for verb in ("Read", "Edit", "Write"):
-                assert f"{verb}({s})" in deny, (name, verb, s)
+            assert f"Read({s})" in deny, (name, s)
+            assert f"Edit({s})" in deny, (name, s)
 
 
-def test_the_kit_protects_its_own_config_from_both_verbs(load_fixture):
+def test_the_kit_protects_its_own_config(load_fixture):
     deny = settings(load_fixture("services_layout"))["permissions"]["deny"]
     for path in ("./.claude/settings.json", "./.claude/kit.lock.json"):
         assert f"Edit({path})" in deny
-        assert f"Write({path})" in deny
 
 
-def test_destructive_commands_are_denied(load_fixture):
-    deny = settings(load_fixture("services_layout"))["permissions"]["deny"]
-    for entry in ["Bash(rm -rf:*)", "Bash(git push --force:*)",
-                  "Bash(git reset --hard:*)", "Bash(docker compose down -v:*)"]:
-        assert entry in deny
+UNCONSULTED = ("Write(", "NotebookEdit(", "Glob(", "MultiEdit(")
+
+
+def test_no_rule_uses_a_prefix_claude_code_never_consults(load_fixture):
+    """Per the permissions docs, a path rule for Write/NotebookEdit/Glob/MultiEdit is
+    "accepted but never consulted, and warns at startup". Read covers Edit and Write;
+    Edit is what covers NotebookEdit. Emitting any of these is strictly worse than
+    omitting it, and it would warn in every project that installs the kit."""
+    for name in FIXTURES:
+        perms = settings(load_fixture(name))["permissions"]
+        for rule in perms["allow"] + perms["deny"]:
+            assert not rule.startswith(UNCONSULTED), (name, rule)
 
 
 def test_the_other_forge_cli_is_denied_when_exclusive(load_fixture):
@@ -1417,6 +1423,8 @@ def test_orchestrator_cannot_spawn_itself(load_fixture):
 @pytest.mark.parametrize("entry", [
     "Bash(rm -rf:*)", "Bash(git push --force:*)", "Bash(git push -f:*)",
     "Bash(git reset --hard:*)", "Bash(docker compose down -v:*)",
+    "Bash(rm -fr:*)", "Bash(docker compose down --volumes:*)",
+    "Bash(docker-compose down -v:*)",
 ])
 def test_destructive_commands_are_denied_individually(entry, load_fixture):
     assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
@@ -1424,12 +1432,48 @@ def test_destructive_commands_are_denied_individually(entry, load_fixture):
 
 @pytest.mark.parametrize("entry", [
     "Bash(git add -A:*)", "Bash(git add .:*)", "Bash(git commit -a:*)",
-    "Bash(git stash:*)",
+    "Bash(git stash:*)", "Bash(git commit -am:*)", "Bash(git commit --all:*)",
+    "Bash(git add --all:*)", "Bash(git add -u:*)",
 ])
 def test_staging_sweeps_are_denied(entry, load_fixture):
     """These four are why a shared git index absorbs one agent's work into
     another's commit. They are the kit's reason for existing, so assert each."""
     assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
+
+
+@pytest.mark.parametrize("entry", [
+    "Bash(git checkout -- .:*)", "Bash(git checkout .:*)",
+    "Bash(git restore .:*)", "Bash(git clean:*)",
+])
+def test_working_tree_wipes_are_denied(entry, load_fixture):
+    """These destroy a *peer's* uncommitted work on a shared checkout, not just
+    your own -- 'undo my changes' is the most plausible reflex there is."""
+    assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
+
+
+@pytest.mark.parametrize("entry", [
+    "Bash(git push --delete:*)", "Bash(git push -d:*)",
+])
+def test_remote_branch_deletion_is_denied(entry, load_fixture):
+    """Deleting a remote branch is outward-facing and not recoverable from here."""
+    assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
+
+
+def test_force_with_lease_is_deliberately_not_denied(load_fixture):
+    """`Bash(git push --force:*)` requires a space after --force, so
+    --force-with-lease is not matched. That is intended: force-with-lease refuses
+    when the remote has moved, so it is the safe alternative the deny rule should be
+    steering toward. Pinned so nobody "fixes" it into a broader rule."""
+    deny = settings(load_fixture("services_layout"))["permissions"]["deny"]
+    assert "Bash(git push --force:*)" in deny
+    assert not any("force-with-lease" in rule for rule in deny)
+
+
+def test_worktree_allow_is_narrowed_to_add_and_list(load_fixture):
+    allow = settings(load_fixture("services_layout"))["permissions"]["allow"]
+    assert "Bash(git worktree add:*)" in allow
+    assert "Bash(git worktree list:*)" in allow
+    assert "Bash(git worktree:*)" not in allow
 
 
 def test_every_toolchain_command_is_allowed(load_fixture):
@@ -1441,13 +1485,27 @@ def test_every_toolchain_command_is_allowed(load_fixture):
 
 
 def test_no_empty_permission_rule_is_emitted(load_fixture):
-    """Regression for the Bash(:*) defect: an empty toolchain value used to render
-    a rule with no prefix at all."""
+    """Cheap insurance only; it cannot currently fail, because validate() rejects
+    empty toolchain values so no loadable profile renders '(:*)'. The real guard is
+    test_empty_toolchain_value_is_rejected in test_model.py."""
     for name in FIXTURES:
         perms = settings(load_fixture(name))["permissions"]
         for rule in perms["allow"] + perms["deny"]:
             assert rule.strip(), name
             assert "()" not in rule and "(:*)" not in rule, (name, rule)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"forge": {"kind": "github", "remote": "g", "cli": "gh", "ci": "c",
+               "exclusive": False}},
+    {"forge": {"kind": "none", "remote": None, "cli": "none", "ci": None,
+               "exclusive": True}},
+    {"secrets": []},
+])
+def test_every_conditional_combination_still_emits_valid_json(load_variant, overrides):
+    cfg = load_variant("services_layout", **overrides)
+    parsed = json.loads(render(cfg)[".claude/settings.json"])
+    assert parsed["permissions"]["allow"] and parsed["permissions"]["deny"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1477,7 +1535,8 @@ Expected: FAIL — `TemplateNotFound: settings.json.j2`
       "Bash(git log:*)",
       "Bash(git commit --only:*)",
       "Bash(git switch:*)",
-      "Bash(git worktree:*)",
+      "Bash(git worktree add:*)",
+      "Bash(git worktree list:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(sed -n:*)"
@@ -1489,21 +1548,31 @@ Expected: FAIL — `TemplateNotFound: settings.json.j2`
 {% for s in cfg.secrets %}
       "Read({{ s }})",
       "Edit({{ s }})",
-      "Write({{ s }})",
 {% endfor %}
       "Edit(./.claude/settings.json)",
-      "Write(./.claude/settings.json)",
       "Edit(./.claude/kit.lock.json)",
-      "Write(./.claude/kit.lock.json)",
       "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git reset --hard:*)",
       "Bash(git add -A:*)",
       "Bash(git add .:*)",
       "Bash(git commit -a:*)",
+      "Bash(git commit -am:*)",
+      "Bash(git commit --all:*)",
+      "Bash(git add --all:*)",
+      "Bash(git add -u:*)",
       "Bash(git stash:*)",
       "Bash(docker compose down -v:*)",
+      "Bash(docker compose down --volumes:*)",
+      "Bash(docker-compose down -v:*)",
+      "Bash(git checkout -- .:*)",
+      "Bash(git checkout .:*)",
+      "Bash(git restore .:*)",
+      "Bash(git clean:*)",
+      "Bash(git push --delete:*)",
+      "Bash(git push -d:*)",
       "Agent(orchestrator)"
 {% if forge.exclusive and forge.kind == 'gitlab' %}
       ,"Bash(gh:*)"
