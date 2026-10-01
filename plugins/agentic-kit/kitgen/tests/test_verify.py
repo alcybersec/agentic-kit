@@ -269,3 +269,43 @@ def test_lock_disagreeing_with_the_config_is_reported(load_fixture):
     lock["project"]["slug"] = "tampered"
     man[".claude/kit.lock.json"] = json.dumps(lock)
     assert any("kit.lock.json" in p for p in verify(man, cfg))
+
+
+# --- the first task of every install must be completable ---------------------
+
+def test_contracts_owned_by_another_role_than_the_m0_task_is_reported(load_fixture):
+    """`M0-S1-ARCH-001` writes `spine.contracts`. If a role other than the one the
+    task is assigned to owns that path, the ownership guard blocks the assigned
+    role, `/handoff` tells it to request the file from the owner, and the task can
+    only ever be PARTIAL. That is a deadlock on move one, so it is a verify error
+    rather than something to discover during M0."""
+    cfg = load_fixture("python_monolith")
+
+    def give_contracts_to_qa(lock):
+        _role(lock, "qa")["owns"].append(lock["spine"]["contracts"])
+
+    cfg2 = _variant(cfg, give_contracts_to_qa)
+    problems = verify(render(cfg2), cfg2)
+    assert any("cannot be completed" in p and "qa" in p for p in problems), problems
+
+
+def test_contracts_owned_by_the_assigned_role_is_fine(load_fixture):
+    """The other direction: the task's own owner holding the path is not a
+    deadlock, so folding `spine.contracts` into `architect.owns` stays an option."""
+    cfg = load_fixture("python_monolith")
+
+    def give_contracts_to_architect(lock):
+        _role(lock, "architect")["owns"].append(lock["spine"]["contracts"])
+
+    cfg2 = _variant(cfg, give_contracts_to_architect)
+    assert verify(render(cfg2), cfg2) == []
+
+
+def test_contracts_unowned_is_the_intended_state(load_fixture):
+    """Every shipped fixture leaves it unowned, and that must stay clean: the guard
+    blocks a path only when another role owns it."""
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        contracts = cfg.spine["contracts"]
+        assert not any(contracts in r.owns for r in cfg.roles), name
+        assert verify(render(cfg), cfg) == [], name

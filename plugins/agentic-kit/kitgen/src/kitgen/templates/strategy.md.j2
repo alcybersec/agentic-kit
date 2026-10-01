@@ -70,6 +70,11 @@ Not applicable for this project.
 New or changed interfaces are recorded in `{{ cfg.spine.contracts }}` **before** implementation,
 with a version and a diff entry.
 
+`{{ cfg.spine.contracts }}` is owned by **no role** in §2, deliberately: contract-first means the
+implementing role records the contract before building against it, and the ownership guard allows an
+unowned path to any role. "Do not write what you do not own" in `/handoff` means *what another role
+owns* — an unowned path crosses nobody's boundary.
+
 ## 9. Handoffs
 
 Every task ends with a `/handoff` note. Evidence over prose: the test command and its last line. A
@@ -112,7 +117,7 @@ to `open`. §10 Status is derived from `{{ cfg.spine.plan }}`, which is authorit
 
 | ID | Owner | Outputs | Tests | Acceptance |
 |---|---|---|---|---|
-| {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton in a path `architect` owns per §2 | Boundaries match §2 and the user accepts them |
+| {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton in a path `architect` owns per §2 | Every entry in `{{ cfg.spine.contracts }}` names its consumers and the boundaries match §2. The user's acceptance of the boundaries is a gate question (§5, Functional), not a condition this task can satisfy on its own |
 | {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-002 | `devops` | dev environment reproducible from a clean clone; `{{ cfg.toolchain.test }}` runs | one trivial smoke test, in a path `devops` owns per §2 or an unowned path, so the suite is wired | A clean clone reaches a green run in one documented command; exit code 5 from an empty collection is a failure, not a pass |
 | {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier, in a path `{{ veto.name }}` owns per §2, one test per floor in §6{% if forge.kind != 'none' %}; a handoff line asking `devops` to wire it into CI{% endif %} | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
 | {{ cfg.milestones.outline[0].id }}-S1-QA-004 | `qa` | tier thresholds from §3 as config in a path `qa` owns per §2 or an unowned path{% if forge.kind != 'none' %}; a handoff line asking `devops` to enforce them in CI{% endif %} | coverage gate fails below floor | A deliberate coverage drop fails `{{ cfg.toolchain.test }}`{% if forge.kind != 'none' %} locally and, once {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-005 lands, in the pipeline{% endif %} |

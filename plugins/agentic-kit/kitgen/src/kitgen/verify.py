@@ -192,6 +192,25 @@ def verify(manifest: dict[str, str], cfg: KitConfig,
                     f"{strategy_path} §11: a task tells {owner!r} to write in a "
                     f"path it owns per §2, but {owner!r} owns no path")
 
+    # A task's owner must be able to write the task's outputs. Checked for
+    # spine.contracts because the M0 contract task is the first task of every
+    # install: when another role owns that path the guard blocks the assigned role,
+    # /handoff tells it to request the file from someone else, and the task can
+    # only ever be PARTIAL -- a deadlock on move one. Unowned is the intended
+    # state and is fine: the guard blocks a path only when ANOTHER role owns it.
+    contracts = cfg.spine["contracts"]
+    owning_contracts = [r.name for r in cfg.roles
+                        if any(_covers(g, contracts) for g in r.owns)]
+    for line, owner in task_rows:
+        if f"`{contracts}`" not in line:
+            continue
+        blocked_by = [o for o in owning_contracts if o != owner]
+        if blocked_by:
+            problems.append(
+                f"{strategy_path} §11: the task writing {contracts!r} is assigned "
+                f"to {owner!r}, but {blocked_by} own that path, so the ownership "
+                f"guard blocks it and the task cannot be completed")
+
     # The role owning forge.ci is the role the CI-wiring row names. Matches the one
     # row that has "wired into `<forge.ci>`"; it does not catch a CI path that is
     # unowned (any role may write an unowned path) or a CI row phrased differently.

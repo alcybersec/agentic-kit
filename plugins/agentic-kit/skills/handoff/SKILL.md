@@ -26,9 +26,12 @@ Then your role's extra lines from `handoff_extra`.
 in the shape that file defines — do not invent another. Under `## Current`, one entry per contract:
 a `### <name> v<N>` heading, a fenced block holding the shape, and a `Consumers:` line naming the
 roles that depend on it. Under `## Change log`, one row: Date, Contract (the `<name>` from the
-heading), Version, Change, Task. The `<name> v<N>` in your note must match that heading. If you do
-not own `spine.contracts`, do not edit it: put the proposed entry in NOTES and ask the `architect`
-role (via the Orchestrator) to record it, and mark the task PARTIAL until it exists.
+heading), Version, Change, Task. The `<name> v<N>` in your note must match that heading. If **another
+role** owns `spine.contracts` in §2, do not edit it: put the proposed entry in NOTES, ask that role
+(via the Orchestrator) to record it, and mark the task PARTIAL until it exists. If **no role** owns
+it — the default, because contract-first requires the implementing role to record a contract before
+building against it — write it yourself. The ownership guard applies the same rule: it blocks a path
+only when another role owns it.
 
 **Evidence over prose.** Paste the test command and its last line. Never write a green you did not
 run. If you could not run it, say `TESTS: not run — <why>` and mark the task PARTIAL: an unverified

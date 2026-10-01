@@ -49,3 +49,16 @@ def test_no_skill_hardcodes_a_spine_path_or_a_forge(name):
     assert "docs/plan/README.md" not in body, f"{name}: read spine.plan from the lock"
     for forge in ("gitlab", "github", "glab", " gh "):
         assert forge not in body.lower(), f"{name}: mentions {forge!r}; stay forge-neutral"
+
+
+def test_handoff_scopes_the_contracts_rule_to_another_role():
+    """`/handoff` used to say "if you do not own `spine.contracts`, do not edit it
+    ... ask the architect". No role owns it in any generated roster, so the first
+    task of every install told `architect` to request the file from itself and mark
+    itself PARTIAL. The guard's actual rule is "blocked only when ANOTHER role owns
+    it", and the skill must say the same thing."""
+    text = (SKILLS / "handoff/SKILL.md").read_text()
+    assert "another\nrole** owns `spine.contracts`" in text or \
+           "another role** owns `spine.contracts`" in text
+    assert "If you do\nnot own `spine.contracts`" not in text
+    assert "no role** owns" in text, "the unowned case must be spelled out"
