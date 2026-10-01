@@ -1,0 +1,34 @@
+# Dispatch State
+
+**Owner.** Orchestrator. **Updated.** After every task completion and every gate.
+
+Source of truth for "what is next". Subagents never edit this file; they emit handoff notes and the
+Orchestrator updates here.
+
+---
+
+## Current milestone
+
+**{{ cfg.milestones.outline[0].id }} — {{ cfg.milestones.outline[0].name }}.** Not yet entered.
+Confirm the entry conditions in `{{ cfg.spine.strategy }}` §11 with the user before dispatching
+anything.
+
+## Next task
+
+**{{ cfg.milestones.outline[0].id }}-S1-ARCH-001** — owner `architect`. Depends: none.
+
+## Active
+
+_none_
+
+## Completed
+
+_none_
+
+## Blocked
+
+_none_
+
+## Open gates
+
+_none. {{ cfg.milestones.outline[0].id }} opens once its entry conditions are confirmed._

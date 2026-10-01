@@ -7,9 +7,6 @@ from kitgen.render import render
 FIXTURES = ["greenfield_prd", "python_monolith", "services_layout"]
 
 
-# Grows as templates land: Task 5 adds the agent cards and memory stubs, Task 6
-# settings.json, Task 7 the docs spine. Keeping it exact at every step means the
-# suite is green at every task boundary instead of red until Task 7.
 def expected_paths(cfg):
     paths = {
         "CLAUDE.md",
@@ -17,6 +14,13 @@ def expected_paths(cfg):
         ".claude/kit.lock.json",
         ".claude/agents/orchestrator.md",
         ".claude/settings.json",
+        "docs/plan/README.md",
+        "docs/strategy.md",
+        "docs/design.md",
+        "docs/decisions.md",
+        "docs/risk-register.md",
+        "docs/CONTRACTS.md",
+        "docs/adr/0001-adopt-agentic-kit.md",
     }
     for r in cfg.roles:
         paths.add(f".claude/agents/{r.name}.md")

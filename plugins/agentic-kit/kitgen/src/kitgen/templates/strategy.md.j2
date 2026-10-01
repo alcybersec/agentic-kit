@@ -1,0 +1,119 @@
+# {{ project.name }} — Strategy
+
+The operating model. `{{ cfg.spine.plan }}` holds current state; this file holds the rules and the
+task graph.
+
+## 1. Roles
+
+The Orchestrator plans and dispatches and writes no implementation code. Each role below owns file
+paths, exclusively.
+
+## 2. Ownership map
+
+| Role | Owns | Handoff extras |
+|---|---|---|
+{% for r in roles %}
+| `{{ r.name }}` | {% for p in r.owns %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} | {% if r.handoff_extra %}{% for h in r.handoff_extra %}`{{ h }}`{{ ", " if not loop.last }}{% endfor %}{% else %}—{% endif %} |
+{% endfor %}
+
+A task crossing a boundary is split, or routed through `architect`. Ownership globs do not overlap;
+`kitgen verify` enforces that.
+
+## 3. Test tiers
+
+| Tier | Floor |
+|---|---|
+{% for tier, pct in cfg.test_tiers.items() %}
+| {{ tier }} | {{ pct }}% |
+{% endfor %}
+
+Pragmatic TDD: test-first for logic, contracts, the data layer and anything under a floor;
+test-after with fixtures for adapters and glue; e2e for UI. `test(red):` prefixes a failing-test
+commit.
+
+## 4. Branching
+
+Trunk-based, one task per branch `task/<TASK-ID>-<slug>`, Conventional Commits. Commits use
+`git commit --only <path>`. Parallel dispatch uses worktree isolation.
+
+## 5. Gates
+
+A gate is checked across five dimensions: **Functional**, **Tests**, **Floors**, **Operational**,
+and the milestone's own additions. Verdicts: **PASS**, **CONDITIONAL** (each condition carries an
+owner and a deadline task ID), **BLOCK**. A failed dimension blocks; no dimension is averaged away.
+
+`{{ veto.name }}` produces the Floors dimension and signs it APPROVE or VETO. A VETO is not
+overridable by the Orchestrator.
+
+A CONDITIONAL that survives two milestones is itself a finding and must be raised to the user, not
+carried silently.
+
+## 6. Floors — never regress
+
+{% for floor in cfg.floors %}
+{{ loop.index }}. {{ floor }}
+{% endfor %}
+
+Floors are append-only. Removing or weakening one requires an ADR and the user's explicit agreement.
+{% if cfg.observability %}
+
+## 7. Observability
+
+Every stage lands with counters, latency metrics and structured logs in the same task that
+implements it — never as a follow-up.
+{% endif %}
+
+## 8. Contracts
+
+New or changed interfaces are recorded in `{{ cfg.spine.contracts }}` **before** implementation,
+with a version and a diff entry.
+
+## 9. Handoffs
+
+Every task ends with a `/handoff` note. Evidence over prose: the test command and its last line. A
+note without a pasted run is not evidence and the Orchestrator re-runs the tests itself.
+
+## 10. Milestones
+
+| ID | Name | Status |
+|---|---|---|
+{% for m in cfg.milestones.outline %}
+| {{ m.id }} | {{ m.name }} | {% if loop.first %}open{% else %}not started{% endif %} |
+{% endfor %}
+
+## 11. Task graph
+
+Task IDs follow `{{ cfg.milestones.id_format }}`. **Only the open milestone is expanded here.** The
+Orchestrator expands the next milestone's tasks at gate time; a graph written further ahead than the
+work is invented work.
+
+### {{ cfg.milestones.outline[0].id }} — {{ cfg.milestones.outline[0].name }}
+
+**Entry conditions**
+
+- [ ] The user has reviewed {% if cfg.spine.inherited %}{% for p in cfg.spine.inherited %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} and {% endif %}this file.
+- [ ] The role roster in §2 is accepted.
+- [ ] The floors in §6 are accepted.
+{% if forge.kind != 'none' %}
+- [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
+{% endif %}
+
+**Tasks**
+
+| ID | Owner | Outputs | Tests | Acceptance |
+|---|---|---|---|---|
+| {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton | Boundaries match §2 and the user accepts them |
+| {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-002 | `devops` | dev environment reproducible from a clean clone; `{{ cfg.toolchain.test }}` runs | the suite runs green and empty | A clean clone reaches a green run in one documented command |
+| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier exists and is wired into CI, one test per floor in §6 | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
+| {{ cfg.milestones.outline[0].id }}-S1-QA-004 | `qa` | tier thresholds from §3 enforced in CI | coverage gate fails below floor | A deliberate coverage drop reddens the pipeline |
+
+**Gate additions:** the floor tier must be non-empty and green, and every floor in §6 must map to a
+named test.
+{% if cfg.milestones.outline | length > 1 %}
+
+### Later milestones (outline only, not yet scoped)
+
+{% for m in cfg.milestones.outline[1:] %}
+- {{ m.id }} — {{ m.name }}
+{% endfor %}
+{% endif %}

@@ -17,16 +17,18 @@ TEMPLATES = Path(__file__).parent / "templates"
 
 # template file -> output path; one entry per singleton output.
 #
-# This table GROWS as templates land, and render() loads every template it names.
-# Listing a template before it exists would make the whole suite raise
-# TemplateNotFound, so each task adds its own entries:
-#   Task 5 -> orchestrator.md.j2  (plus the per-role loop below)
-#   Task 6 -> settings.json.j2
-#   Task 7 -> plan/strategy/design/decisions/risk-register/CONTRACTS/adr-0001
+# Complete: every template here must exist, since render() loads each one.
 SINGLETONS = {
     "CLAUDE.md.j2": "CLAUDE.md",
     "orchestrator.md.j2": ".claude/agents/orchestrator.md",
     "settings.json.j2": ".claude/settings.json",
+    "plan.md.j2": "docs/plan/README.md",
+    "strategy.md.j2": "docs/strategy.md",
+    "design.md.j2": "docs/design.md",
+    "decisions.md.j2": "docs/decisions.md",
+    "risk-register.md.j2": "docs/risk-register.md",
+    "CONTRACTS.md.j2": "docs/CONTRACTS.md",
+    "adr-0001.md.j2": "docs/adr/0001-adopt-agentic-kit.md",
 }
 
 

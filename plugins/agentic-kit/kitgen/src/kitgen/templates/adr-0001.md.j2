@@ -1,0 +1,31 @@
+# ADR 0001 — Adopt the agentic-kit orchestrator model
+
+**Status** Accepted · **Date** {{ cfg.rendered_on }} · **Kit version** {{ cfg.kit_version }}
+
+## Context
+
+{{ project.name }} is developed with Claude Code sessions. Without an explicit operating model, work
+arrives without owners, tests are claimed rather than run, and invariants regress silently.
+
+## Decision
+
+Adopt the `agentic-kit` orchestrator model:
+
+- A default **Orchestrator** that plans, dispatches and validates, and writes no implementation code.
+- {{ roles | length }} roles with **exclusive file-path ownership**, listed in
+  `{{ cfg.spine.strategy }}` §2.
+- **`{{ veto.name }}` holds a veto** on gates, scoped to the floors in §6.
+- A docs spine as the source of truth: `{{ cfg.spine.plan }}` for state,
+  `{{ cfg.spine.strategy }}` for rules and the task graph.
+- Handoff notes carrying pasted test evidence.
+- Guard hooks from the plugin that make the atomic-commit and secret-path rules executable rather
+  than advisory.
+
+## Consequences
+
+- The first turn of a session costs a documented read of the load order in `CLAUDE.md`.
+- Ownership boundaries must partition; adding a role means redistributing globs.
+- Floors cannot be weakened without a further ADR.
+{% if forge.kind != 'none' %}
+- `{{ forge.cli }}` is the only forge CLI{% if forge.exclusive %}, enforced by `pre-bash-guard`{% endif %}.
+{% endif %}
