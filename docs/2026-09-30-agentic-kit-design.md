@@ -339,6 +339,19 @@ these hooks match on **command strings**, so neither is a sandbox:
 - Exclusive file-path ownership **is** enforced, by the per-role guard in §6.5 — but only against the
   file tools. A role can still reach another role's tree through Bash (`sed -i`, a script), because
   that guard matches `Edit|Write|NotebookEdit|MultiEdit` and not command strings.
+- **The ownership guard is absent, not lenient, in an untrusted workspace** (recorded 2026-10-01).
+  It is registered by each role card's frontmatter `hooks:` block, and "until you trust the folder,
+  the subagent still runs, but Claude Code skips its frontmatter hooks". A `-p` session **never**
+  counts as trusted. So in a fresh clone before the trust prompt is accepted, and in every
+  non-interactive run, ownership is not enforced at all — while the sentence above says it is. The
+  four plugin-level hooks in `hooks/hooks.json` are unaffected; only the rendered per-role guard
+  depends on trust.
+- **Inert by design and broken are indistinguishable from the outside.** Every hook exits 0 when `jq`
+  is missing, when the lock is absent or unparseable, or when the script itself has been renamed or
+  deleted — and Claude Code treats any non-2 exit as "continue". That is the right default for a
+  machine-wide plugin (§4.3), and it means a silently disarmed guard looks exactly like a correctly
+  inert one. `/kit-doctor` exists to tell them apart by firing each guard with a payload that must be
+  refused and reporting which actually refused it.
 
 What the deny list does have going for it is precedence: "deny rules from any scope are evaluated
 before allow rules", and a hook cannot loosen them — "Claude Code evaluates deny and ask rules
@@ -484,6 +497,14 @@ therefore an Orchestrator-or-`architect` skill, and §6 says so rather than leav
 
 **Not registered on the orchestrator**, which owns no paths and legitimately writes the dispatch
 state, the risk register and the gate bundles.
+
+**Where this guard does not run at all** (recorded 2026-10-01). Frontmatter hooks are skipped until
+the workspace is trusted, and a `-p` session never counts as trusted, so the guard is **absent** in a
+fresh clone before the trust prompt is accepted and in every non-interactive run. It is not a
+containment boundary in any case (§6.2), but the distinction matters for what this document may
+claim: ownership is enforced in an interactive, trusted checkout, and nowhere else. `/kit-doctor`
+reports which guards actually fired, because a disarmed hook and a correctly inert one look the same
+from outside.
 
 It is rendered rather than shipped in the plugin because a project's role card cannot reference
 `${CLAUDE_PLUGIN_ROOT}`; the side benefit is that ownership enforcement survives in a checkout where
