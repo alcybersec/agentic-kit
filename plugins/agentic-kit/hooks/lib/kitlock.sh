@@ -8,6 +8,20 @@
 # Every guard below ends in `exit 0`, silently: nothing on stdout or stderr.
 #
 # Exports: KIT_LOCK (path), KIT_INPUT (raw stdin), and kit_q() to query the lock.
+#
+# Path matching (kit_lexnorm, kit_candidates, kit_match_glob):
+#   kit_candidates <file_path> <cwd>   fills KIT_CANDS with project-relative spellings of
+#       the path (lexical, and the realpath target so a symlink is caught by name AND by
+#       target). Returns 1 when none is inside the project: "not ours to police", which is
+#       distinct from "inside but no match".
+#   kit_match_glob <patterns>          newline-separated globs, leading "./" optional;
+#       sets KIT_MATCHED (the pattern) and KIT_MATCHED_REL (the candidate) for the first
+#       match and returns 0, else returns 1. No stdout: callers need the vars, not a subshell.
+#
+# Task 12b's per-role ownership guard depends on these exact semantics. In particular:
+# `case` anchors the WHOLE string, so ".env" must never match ".env.example"; and `**`
+# in a bash case glob spans "/", so "secrets/**" matches "secrets/db/pw.txt". Patterns
+# are root-anchored: "./.env" does not cover "sub/.env".
 
 kit_bail_ok() { exit 0; }
 
@@ -38,6 +52,59 @@ kit_q() { jq -r "$1 // empty" "$KIT_LOCK" 2>/dev/null; }
 
 # kit_in <jq-filter> — query the hook payload
 kit_in() { printf '%s' "$KIT_INPUT" | jq -r "$1 // empty" 2>/dev/null; }
+
+# kit_lexnorm <abs-path> — collapse //, /./ and /../ without touching the filesystem.
+# Pure parameter expansion so a newline in the path cannot split it, and no `dirname`.
+kit_lexnorm() {
+  local rest="${1#/}" seg out=""
+  while :; do
+    seg="${rest%%/*}"
+    case "$seg" in
+      ''|.) ;;
+      ..)   out="${out%/*}" ;;
+      *)    out="$out/$seg" ;;
+    esac
+    case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+  done
+  printf '%s' "${out:-/}"
+}
+
+# kit_candidates <file_path> <cwd> — see header. Needs KIT_LOCK (after kit_init).
+kit_candidates() {
+  local path="$1" cwd="$2" root abs lex res root_lex root_res c
+  root="${KIT_LOCK%/.claude/kit.lock.json}"
+  [ -n "$cwd" ] || cwd="$root"
+  case "$path" in /*) abs="$path" ;; *) abs="$cwd/$path" ;; esac
+  lex=$(kit_lexnorm "$abs")
+  root_lex=$(kit_lexnorm "$root"); root_res="$root_lex"
+  local -a abss=("$lex")
+  if command -v realpath >/dev/null 2>&1; then
+    res=$(realpath -m -- "$abs" 2>/dev/null) && [ "$res" != "$lex" ] && abss+=("$res")
+    root_res=$(realpath -m -- "$root" 2>/dev/null) || root_res="$root_lex"
+  fi
+  KIT_CANDS=(); export KIT_CANDS
+  for c in "${abss[@]}"; do
+    case "$c" in
+      "$root_lex"/*) KIT_CANDS+=("${c#"$root_lex"/}") ;;
+      "$root_res"/*) KIT_CANDS+=("${c#"$root_res"/}") ;;
+    esac
+  done
+  [ "${#KIT_CANDS[@]}" -gt 0 ]
+}
+
+# kit_match_glob <newline-separated patterns> — see header.
+kit_match_glob() {
+  local pattern pat c
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] || continue
+    pat="${pattern#./}"
+    for c in "${KIT_CANDS[@]}"; do
+      # shellcheck disable=SC2254  # the pattern is a glob on purpose; case anchors it
+      case "$c" in $pat) KIT_MATCHED="$pattern"; KIT_MATCHED_REL="$c"; export KIT_MATCHED KIT_MATCHED_REL; return 0 ;; esac
+    done
+  done <<<"$1"
+  return 1
+}
 
 # kit_deny <reason> — block the tool call, per the Claude Code hook contract
 kit_deny() {
