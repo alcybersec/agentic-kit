@@ -11,6 +11,25 @@ means an auditor reported it and it was not independently re-run.
 
 ---
 
+## Part 0 — The five design decisions, resolved 2026-10-02
+
+The user agreed with all four recommendations (ownership granularity and the observability floor were
+one decision, being the same mechanism).
+
+| # | Decision | Commit |
+|---|---|---|
+| 1 | **`critical: [paths]`**, not a precedence engine. Every role is refused those paths including the tree's owner; the veto role is allowed them owning nothing around them. Optional, defaulting to empty, with `owns`-style normalisation. **Observability** is scoped to a role's own paths; a shared registry is a `CONTRACTS.md` entry, so no exemption mechanism. | `eb35753` |
+| 2 | **Spine stays at six documents.** The premise did not survive measurement: `CONTRACTS.md`, `decisions.md`, `design.md` and `risk-register.md` total **1990 B / 409 words** on `greenfield_prd`. The weight is `strategy.md` (5.4 KB, which must exist) and role cards (~2.3 KB each). Merging would add write contention across concurrently dispatched roles and lose the orphan-free index property. No change. | — |
+| 3 | **Ceiling of eight roles** with a documented merge order, plus the stronger rule — a role owns at least one path and, once the graph is expanded past M0, holds at least one task. Reported by `kitgen.advise()` as `advice:` on stderr, never affecting the exit code. | `0f4b212` |
+| 4 | **Five dimensions, two files.** `summary.md` holds Functional, Tests, Operational, milestone additions and the Verdict; `floors.md` stays separate and is authored by the veto role, because it can BLOCK and its author's verdict must not be softened in synthesis. | `8c77c07` |
+
+Decision 3's no-task check was **wrong as first argued** and the fixtures said so: it fired on four of
+eight roles in `services_layout`. The generated M0 table assigns work to `architect`, `devops`, `qa` and
+the veto role alone, so every domain role correctly has none at install. It is now silent until a task
+ID from a later milestone appears. Advice nobody can act on is advice nobody reads.
+
+---
+
 ## Part 1 — Verdict and root causes
 
 **The engine is correct; the product is not usable end to end.** Five independent audits agree. The
