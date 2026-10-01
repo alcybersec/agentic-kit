@@ -217,17 +217,35 @@ def test_parent_transcript_is_only_a_fallback(tmp_path):
                         transcript_path=write_t(p, "r.jsonl", NOTE)).returncode == 0
 
 
-def test_last_assistant_message_is_primary_and_skips_the_transcript(tmp_path):
+def test_either_source_satisfies_the_check(tmp_path):
     p = make_project(tmp_path)
     with_note = write_t(p, "n.jsonl", NOTE)
-    r = stop_payload(p, last_assistant_message="finished, no note",
-                     agent_transcript_path=with_note)
-    assert r.returncode == 2
+    no_note = write_t(p, "e.jsonl", "no")
+    # note earlier, closing remark last: passes (was a false positive when the message was primary)
+    assert stop_payload(p, last_assistant_message="Done.",
+                        agent_transcript_path=with_note).returncode == 0
+    # note in the last message, none in the transcript
     assert stop_payload(p, last_assistant_message="wrap up\n\n" + NOTE,
-                        agent_transcript_path=write_t(p, "e.jsonl", "no")).returncode == 0
-    # empty message -> falls back to the transcript
+                        agent_transcript_path=no_note).returncode == 0
+    # no note in either source
+    assert stop_payload(p, last_assistant_message="Done.",
+                        agent_transcript_path=no_note).returncode == 2
+    # message only, no note
+    assert stop_payload(p, last_assistant_message="Done.").returncode == 2
+    # empty message falls through to the transcript
     assert stop_payload(p, last_assistant_message="",
                         agent_transcript_path=with_note).returncode == 0
+    assert stop_payload(p, last_assistant_message="",
+                        agent_transcript_path=no_note).returncode == 2
+
+
+def test_false_negative_still_blocks_with_a_closing_message(tmp_path):
+    """Parent has a note, subagent does not: still 2 whatever the last message says."""
+    p = make_project(tmp_path)
+    sub = write_t(p, "sub.jsonl", "all done")
+    parent = write_t(p, "parent.jsonl", NOTE)
+    assert stop_payload(p, last_assistant_message="Done.",
+                        agent_transcript_path=sub, transcript_path=parent).returncode == 2
 
 
 def test_documented_limit_a_quoted_note_on_its_own_line_passes(tmp_path):
