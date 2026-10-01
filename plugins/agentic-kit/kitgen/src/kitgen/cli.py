@@ -1,5 +1,11 @@
 # plugins/agentic-kit/kitgen/src/kitgen/cli.py
-"""kitgen CLI. Exit codes: 0 ok, 1 verification problems, 2 bad profile, 3 refused.
+"""kitgen CLI. Exit codes:
+
+    0  ok
+    1  verification problems
+    2  bad profile (or bad --rendered-on)
+    3  refused to overwrite
+    4  write failed partway; the tree is incomplete and a retry needs --force
 
 Consumers invoke it without kitgen on PATH, via the plugin cache:
 
@@ -11,6 +17,7 @@ cache is a real failure mode to report, not to fall back from silently.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -38,16 +45,28 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--force", action="store_true",
                    help="overwrite generated files (generate-once files are still kept)")
 
-    v = sub.add_parser("verify", help="verify a rendered kit against its profile")
+    v = sub.add_parser("verify", help="check that the profile renders a consistent kit and that its "
+                          "inherited docs are present on disk")
     v.add_argument("--profile", type=Path, required=True)
     v.add_argument("--root", type=Path, required=True)
 
     args = parser.parse_args(argv)
 
+    # `is not None`, not truthiness: an explicit empty string is a caller mistake, not
+    # "unset". The ADR is generate-once, so a bad stamp would be permanent.
+    rendered_on = getattr(args, "rendered_on", None)
+    if rendered_on is not None:
+        try:
+            datetime.date.fromisoformat(rendered_on)
+        except ValueError:
+            print(f"invalid --rendered-on {rendered_on!r}: expected an ISO date "
+                  "(YYYY-MM-DD)", file=sys.stderr)
+            return 2
+
     try:
         raw = yaml.safe_load(args.profile.read_text())
-        if getattr(args, "rendered_on", None):
-            raw["rendered_on"] = args.rendered_on
+        if rendered_on is not None:
+            raw["rendered_on"] = rendered_on
         cfg = KitConfig.from_dict(raw)
         manifest = render(cfg)
     except (ValueError, KeyError, TypeError, AttributeError, OSError,
@@ -66,42 +85,58 @@ def main(argv: list[str] | None = None) -> int:
             print(p)
         return 1 if problems else 0
 
-    if args.dry_run:
-        print(json.dumps({"manifest": sorted(manifest)}, indent=2))
-        return 0
-
     # Verify BEFORE touching the filesystem: a half-written kit is worse than none.
+    # This runs for --dry-run too, so a preview has the same verdict as the real run.
     problems = verify(manifest, cfg, project_root=args.out)
     if problems:
         for p in problems:
             print(p, file=sys.stderr)
         return 1
 
-    if not args.force:
-        clashes = [p for p in manifest if (args.out / p).exists()]
-        if clashes:
-            print(f"refusing to overwrite: {sorted(clashes)}", file=sys.stderr)
-            return 3
-    else:
+    # Directories count as clashes too (.exists(), not .is_file()).
+    clashes = sorted(p for p in manifest if (args.out / p).exists())
+    frozen: list[str] = []
+    if args.force:
         # --force still must not clobber these. The plan file IS the dispatch state
         # after the first task, and ADR 0001 stamps the install's date and kit
         # version -- re-rendering it restamps an Accepted record with a later
         # install's facts, falsifying the thing the ADR exists to preserve.
-        frozen = sorted(p for p in GENERATE_ONCE
-                        if p in manifest and (args.out / p).exists())
-        if frozen:
-            print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
-            for p in frozen:
-                del manifest[p]
+        frozen = sorted(p for p in GENERATE_ONCE if p in clashes)
+        clashes = []
 
-    # Manifest insertion order is the write order: kit.yaml before kit.lock.json
-    # (spec 5.1 reads mtime(kit.yaml) > mtime(lock) as drift). Do not sort.
+    if args.dry_run:
+        print(json.dumps({"manifest": sorted(manifest),
+                          "clashes": clashes,
+                          "frozen": frozen}, indent=2))
+        return 3 if clashes else 0
+
+    if clashes:
+        print(f"refusing to overwrite: {clashes}", file=sys.stderr)
+        return 3
+    if frozen:
+        print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
+        for p in frozen:
+            del manifest[p]
+
+    # Manifest insertion order is the write order AND the order of the emitted
+    # `written` list (tests assert on it): kit.yaml before kit.lock.json (spec 5.1
+    # reads mtime(kit.yaml) > mtime(lock) as drift). Do not sort.
+    written: list[str] = []
     for path, content in manifest.items():
         target = args.out / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-        if path.startswith(HOOKS_PREFIX):
-            target.chmod(target.stat().st_mode | 0o111)   # hooks are inert unless +x
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+            if path.startswith(HOOKS_PREFIX):
+                target.chmod(target.stat().st_mode | 0o111)   # inert unless +x
+        except OSError as exc:
+            print(f"write failed at {path}: {type(exc).__name__}: {exc}\n"
+                  f"already written ({len(written)}): {written}\n"
+                  "the tree is incomplete. Fix the cause and re-run with --force; "
+                  "a plain retry will refuse (exit 3) because those files now exist.",
+                  file=sys.stderr)
+            return 4
+        written.append(path)
 
-    print(json.dumps({"written": list(manifest)}, indent=2))
+    print(json.dumps({"written": written}, indent=2))
     return 0
