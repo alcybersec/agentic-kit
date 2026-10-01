@@ -282,10 +282,21 @@ the same worktree lesson is recorded twice in this user's notes.
 |---|---|---|
 | `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/claude|anthropic|co-authored-by:.*claude/i` when `attribution.mention_assistant_in_commits` is false |
 | `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
-| `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file |
-| `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note |
+| `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file, and **never fails a tool call** |
+| `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message` (falling back to `agent_transcript_path`) |
 
 Every one exits 0 when the lock is absent (§4.3).
+
+**`post-edit-format` never blocks, and formats a fixed extension set.** It is a `PostToolUse` hook, so
+the edit has already happened: a formatter that is missing, non-zero, slow or noisy is a formatting
+problem, not a policy breach, and converting it into a failed tool call would be strictly worse than an
+unformatted file. It exits 0 unconditionally — verified against a formatter that exits non-zero, does
+not exist, is the empty string, writes to stderr, is a bare `*`, and hangs until `timeout` kills it.
+
+It formats `py ts tsx js jsx go rs rb java kt css scss` only. A `prettier` project would want `.md`,
+`.json` and `.yaml`, and a `gofmt` or `ruff format` pointed at `.md` would error or mangle the file — so
+the right fix is a `toolchain.format_extensions` key set during the interview, not a wider default
+inside a hook. Recorded as an M2 item rather than guessed at here.
 
 **Where the deny list stops.** It covers what a cooperative agent plausibly does *by reflex* and
 cannot undo: the staging sweep, the force push, the hard reset, the working-tree wipe
@@ -354,6 +365,26 @@ The honest claim is that this layer stops **accidents and drift by a cooperative
 staging sweep, the force push, the volume-deleting `down -v`, the wrong forge CLI, the credential
 read reached for without thinking. It is not a containment boundary and must never be described as
 one. Containment needs the agent to run somewhere it cannot reach what matters.
+
+**The SubagentStop payload is not the PreToolUse payload**, and getting this wrong silently inverts the
+handoff gate. Verified against the Claude Code binary, which constructs it with
+`hook_event_name: "SubagentStop"`, `stop_hook_active`, `agent_id`, **`agent_transcript_path`**,
+`agent_type` and `last_assistant_message`:
+
+- **Read `agent_transcript_path`, never `transcript_path`.** Both are present — the latter arrives with
+  the base fields and points at the **parent session's** transcript. A hook reading it inspects the
+  orchestrator's conversation instead of the subagent's, so the check passes because the *orchestrator*
+  discussed a handoff note while the subagent emitted nothing. A gate that passes on the wrong evidence
+  is worse than no gate, because §9 of the generated `strategy.md` tells the Orchestrator to trust it.
+  No test catches this, since tests construct their own payloads and the wrong field name is consistent
+  across plan, code and fixture.
+- **Prefer `last_assistant_message`.** The payload hands over the subagent's final text directly, which
+  removes any assumption about transcript JSONL shape and is what the agent actually ended on.
+- **Honour `stop_hook_active`.** The harness's own guidance: *"For Stop/SubagentStop hooks, check
+  `stop_hook_active` in the input and return success while it's true."* Without it, an agent that cannot
+  produce a note is blocked repeatedly until the harness's cap (`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`,
+  default 8) intervenes — eight wasted turns, surfacing as the subagent looping rather than as a clear
+  failure.
 
 **Hook I/O contract**, confirmed against the official `plugin-dev/hook-development` examples: the
 payload arrives as JSON on stdin (`.tool_name`, `.tool_input.command`, `.tool_input.file_path`,
