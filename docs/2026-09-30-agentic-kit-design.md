@@ -449,6 +449,18 @@ fixtures before implementation.
 Refused for every role regardless of the map: another role's `agent-memory`, any `.claude/agents/**`
 card, `spine.plan` (subagents emit a handoff note instead), and **`spine.strategy` and `spine.risks`**.
 
+Amended 2026-10-01 (fix 0.5) — the list above stopped short of the files enforcement itself depends on.
+Also refused for every role: **`.claude/hooks/*`**, **`.claude/kit.yaml`**, **`.claude/kit.lock.json`**,
+**`.claude/settings.json`**, and every path in **`spine.inherited`**. The first four are the same
+argument as `strategy.md` carried one step further: one `Edit` of the guard, or of the lock it reads the
+ownership map from, disarms ownership for every role at once — a shorter route to self-expansion than
+rewriting the rulebook, and the original list left it open. `spine.inherited` holds the documents the
+project arrived with: a role that may rewrite the PRD can make any task compliant by editing what
+compliance means. `settings.json` mirrors the deny for `hooks/**`, `agents/**`, `settings.json` and the
+lock, which binds the Orchestrator too — all four are generated, so a hand edit is overwritten by the
+next render regardless. `kit.yaml` is deliberately **not** mirrored: it is the one file a legitimate
+change to the kit edits, and a session-wide deny would leave nobody able to add a role.
+
 Those last two matter for the same reason `settings.json` denies `Edit` on itself: a role agent could
 otherwise rewrite §6 — the floors it is bound by — or its own §2 ownership row, which is
 self-expansion by the shortest possible route. `spine.decisions`, `spine.contracts` and `spine.design`

@@ -73,6 +73,19 @@ CASES = [
     ("python_monolith", "backend", "docs/design.md", False),
     ("python_monolith", "backend", "docs/CONTRACTS.md", False),
     ("python_monolith", "architect", "docs/decisions.md", False),
+    # the guard protects itself: every refusal above is only as strong as these
+    ("python_monolith", "backend", ".claude/hooks/ownership-guard.sh", True),
+    ("python_monolith", "safety", ".claude/hooks/ownership-guard.sh", True),
+    ("python_monolith", "backend", ".claude/kit.lock.json", True),
+    ("python_monolith", "backend", ".claude/kit.yaml", True),
+    ("python_monolith", "backend", ".claude/settings.json", True),
+    ("services_layout", "devops", ".claude/kit.lock.json", True),
+    # inherited documents are the user's, not an agent's
+    ("services_layout", "api", "docs/PRD.md", True),
+    ("services_layout", "worker", "docs/architecture.md", True),
+    ("greenfield_prd", "safety", "docs/PRD.md", True),
+    # ... and a project that inherited nothing keeps those names free
+    ("python_monolith", "backend", "docs/PRD.md", False),
 ]
 
 
@@ -187,7 +200,9 @@ def test_strategy_and_risks_are_blocked_for_every_role(tmp_path, load_fixture, r
 def test_the_rendered_guard_does_not_source_anything_from_the_plugin(load_fixture):
     body = render(load_fixture("python_monolith"))[GUARD]
     assert "CLAUDE_PLUGIN_ROOT" not in body
-    assert "source " not in body and not re.search(r"^\s*\. ", body, re.M)
+    # Anchored to the start of a line: these must match a *command*, and a bare
+    # substring search also matched the words "source of truth" in a deny message.
+    assert not re.search(r"^\s*(source|\.) ", body, re.M)
 
 
 def test_inlined_matcher_is_identical_to_the_plugin_library(load_fixture):

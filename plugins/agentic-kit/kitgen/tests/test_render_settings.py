@@ -26,9 +26,21 @@ def test_every_secret_path_is_denied_for_read_and_edit(load_fixture):
 
 
 def test_the_kit_protects_its_own_config(load_fixture):
+    """The deny half of the self-protection the ownership guard enforces per role.
+    This half binds every session, the orchestrator's included, which is the point:
+    these four are generated from the profile, so a hand edit is overwritten by the
+    next render anyway -- and an edit of a hook or a role card disarms enforcement
+    for everyone in the meantime.
+
+    `.claude/kit.yaml` is deliberately NOT here. The guard refuses it per role, but
+    the profile is the one file a legitimate change to the kit edits, and denying it
+    session-wide would leave nobody able to add a role.
+    """
     deny = settings(load_fixture("services_layout"))["permissions"]["deny"]
-    for path in ("./.claude/settings.json", "./.claude/kit.lock.json"):
-        assert f"Edit({path})" in deny
+    for path in ("./.claude/settings.json", "./.claude/kit.lock.json",
+                 "./.claude/hooks/**", "./.claude/agents/**"):
+        assert f"Edit({path})" in deny, path
+    assert "Edit(./.claude/kit.yaml)" not in deny
 
 
 UNCONSULTED = ("Write(", "NotebookEdit(", "Glob(", "MultiEdit(")
