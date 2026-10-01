@@ -2555,12 +2555,12 @@ from .hooks_conftest import bash_payload, run_hook
 HOOK = "pre-bash-guard.sh"
 
 
-def make_project(tmp_path, **overrides):
+def make_project(tmp_path, secrets=None, **overrides):
     lock = {
+        "secrets": secrets if secrets is not None else ["./.env"],
         "forge": {"kind": "gitlab", "cli": "glab", "exclusive": True,
                   "mirror": None, "remote": "git@h:o/r.git", "ci": ".gitlab-ci.yml"},
         "attribution": {"mention_assistant_in_commits": False},
-        "secrets": ["./.env"],
         "toolchain": {"format": "ruff format"},
     }
     lock.update(overrides)
@@ -2643,6 +2643,28 @@ def test_attribution_is_allowed_when_the_profile_permits_it(tmp_path):
     assert run_hook(HOOK, bash_payload(cmd, p), p).returncode == 0
 
 
+def test_a_command_naming_a_secret_path_is_blocked(tmp_path):
+    """Read(./.env) is denied in settings.json but Bash(cat:*) is allowed, so a path
+    deny cannot stop `cat ./.env`. Only this hook sees the command string."""
+    p = make_project(tmp_path)
+    for cmd in ["cat .env", "cat ./.env", "grep -r TOKEN .env", "cp .env /tmp/x"]:
+        r = run_hook(HOOK, bash_payload(cmd, p), p)
+        assert r.returncode == 2, cmd
+        assert "secret path" in r.stderr
+
+
+def test_a_glob_secret_is_matched_by_its_literal_prefix(tmp_path):
+    p = make_project(tmp_path, secrets=["./secrets/**"])
+    r = run_hook(HOOK, bash_payload("cat secrets/db/pw.txt", p), p)
+    assert r.returncode == 2
+
+
+def test_an_unrelated_command_is_not_blocked_by_the_secret_check(tmp_path):
+    p = make_project(tmp_path)
+    for safe in ["cat README.md", "ls -la", "cat .env.example"]:
+        assert run_hook(HOOK, bash_payload(safe, p), p).returncode == 0, safe
+
+
 def test_a_substring_match_does_not_cause_a_false_block(tmp_path):
     p = make_project(tmp_path)
     for safe in ["echo 'git add -A is forbidden'",
@@ -2695,6 +2717,20 @@ while IFS= read -r seg; do
       kit_deny "Blocked: '-v' deletes named volumes, i.e. the data. Use 'docker compose down' alone." ;;
   esac
 done <<< "$segments"
+
+# A path deny cannot see inside a shell command: Read(./.env) is denied while
+# Bash(cat:*) is allowed, so `cat ./.env` would otherwise be unguarded. This is the
+# only place that gap can be closed.
+while IFS= read -r pattern; do
+  [ -n "$pattern" ] || continue
+  pat="${pattern#./}"
+  pat="${pat%%\**}"
+  [ -n "$pat" ] || continue
+  case "$cmd" in
+    *"$pat"*)
+      kit_deny "Blocked: this command names ${pattern}, a secret path in .claude/kit.yaml. Never read or print it; use the .example template instead." ;;
+  esac
+done < <(jq -r '.secrets[]? // empty' "$KIT_LOCK")
 
 forge_kind=$(kit_q '.forge.kind')
 forge_cli=$(kit_q '.forge.cli')

@@ -180,6 +180,11 @@ observability: true                # when true, the "ships with the feature" rul
 - `spine`, `toolchain`, `milestones` and `attribution` MUST carry all of their keys. A typo here would
   otherwise survive validation and surface as a Jinja2 `StrictUndefined` failure at render time,
   which is neither a `ConfigError` nor actionable.
+- Every `toolchain` value MUST be a non-empty command string. An empty one renders the permission rule
+  `Bash(:*)`, whose meaning depends on how the host parses an empty prefix — plausibly
+  match-everything, which would silently void the deny list it sits beside.
+- Secret paths are denied for `Read`, `Edit` **and** `Write`. Denying only the first two leaves the
+  file writable, which is the same exposure by a different verb.
 - `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
   coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
 - Ownership globs MUST be **normalised**: repository-root-relative, forward-slashed, with no leading
@@ -267,6 +272,22 @@ the same worktree lesson is recorded twice in this user's notes.
 | `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note |
 
 Every one exits 0 when the lock is absent (§4.3).
+
+**What the permission file and these hooks do NOT guarantee.** Both `.claude/settings.json` rules and
+these hooks match on **command strings**, so neither is a sandbox:
+
+- A command routed through an allow-listed interpreter is unconstrained. `toolchain.pm` becomes
+  `Bash(uv:*)` so that ordinary work does not prompt, and `uv run python -c "…"` therefore matches no
+  deny rule however destructive its argument.
+- `Bash(cat:*)` is allowed because reading files is ordinary work, so `cat ./.env` is not stopped by
+  `Read(./.env)` — a *path* deny cannot see into a shell command. `pre-bash-guard` closes this
+  specific case by inspecting Bash commands for `secrets` paths, which is why that check exists in
+  addition to `pre-file-guard`.
+
+The honest claim is that this layer stops **accidents and drift by a cooperative agent** — the
+staging sweep, the force push, the volume-deleting `down -v`, the wrong forge CLI, the credential
+read reached for without thinking. It is not a containment boundary and must never be described as
+one. Containment needs the agent to run somewhere it cannot reach what matters.
 
 **Hook I/O contract**, confirmed against the official `plugin-dev/hook-development` examples: the
 payload arrives as JSON on stdin (`.tool_name`, `.tool_input.command`, `.tool_input.file_path`,
