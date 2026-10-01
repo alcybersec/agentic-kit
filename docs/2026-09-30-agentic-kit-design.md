@@ -445,6 +445,12 @@ M2's installing skills branch on these, so they are normative:
 | 3 | refused to overwrite existing files; **nothing was written** |
 | 4 | the write failed partway, so the tree is **incomplete**; a plain retry will refuse with 3, and recovery is to fix the cause and re-run with `--force` |
 
+`--dry-run` **writes nothing and returns the code the real run would return** — including 3 when the
+tree has clashes and 1 when verification fails. It is a predictor, not a separate verdict: a preview
+that reports 0 where the real run reports 1 is worse than no preview. Its stdout carries the manifest,
+the clashes that would cause a refusal, and the generate-once files that would be kept, so a caller can
+act on the detail without re-deriving it.
+
 Codes 1 and 3 guarantee an untouched tree. Code 4 does not, and is the only state where the kit can be
 half-installed: the CLI is not atomic, and its stderr names the file that failed and the files already
 written so the caller can tell how far it got. Collapsing a write failure into 1 would tell a skill

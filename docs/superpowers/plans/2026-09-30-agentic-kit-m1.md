@@ -2626,11 +2626,45 @@ def test_refusal_writes_nothing_else(tmp_path):
 
 
 def test_dry_run_writes_nothing_and_prints_the_manifest(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    before = _tree(tmp_path)
     rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
                "--dry-run"])
     assert rc == 0
-    assert not (tmp_path / "CLAUDE.md").exists()
-    assert "CLAUDE.md" in json.loads(capsys.readouterr().out)["manifest"]
+    out = json.loads(capsys.readouterr().out)
+    assert "CLAUDE.md" in out["manifest"]
+    assert out["clashes"] == [] and out["frozen"] == []
+    assert _tree(tmp_path) == before
+
+
+def test_dry_run_has_the_real_runs_verdict_on_verification_failure(tmp_path, capsys):
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--dry-run"])
+    assert rc == 1
+    assert "docs/PRD.md" in capsys.readouterr().err
+    assert _tree(tmp_path) == set()
+
+
+def test_dry_run_reports_clashes_and_writes_nothing(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("existing")
+    before = _tree(tmp_path)
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--dry-run"])
+    assert rc == 3   # same verdict as the real run
+    assert json.loads(capsys.readouterr().out)["clashes"] == ["CLAUDE.md"]
+    assert _tree(tmp_path) == before
+    assert (tmp_path / "CLAUDE.md").read_text() == "existing"
+
+
+def test_dry_run_with_force_reports_frozen_paths(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    (tmp_path / "docs/plan").mkdir()
+    (tmp_path / "docs/plan/README.md").write_text("STATE")
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+               "--dry-run", "--force"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["frozen"] == ["docs/plan/README.md"] and out["clashes"] == []
+    assert (tmp_path / "docs/plan/README.md").read_text() == "STATE"
 
 
 def test_verification_failure_writes_nothing(tmp_path, capsys):
@@ -2643,14 +2677,15 @@ def test_verification_failure_writes_nothing(tmp_path, capsys):
     assert _tree(tmp_path) == before == set()
 
 
-def test_lock_is_written_after_kit_yaml(tmp_path):
-    """Spec 5.1: mtime(kit.yaml) > mtime(kit.lock.json) means hand-edited drift, so a
-    clean install must leave the lock at least as new as the yaml."""
+def test_lock_is_written_after_kit_yaml(tmp_path, capsys):
+    """Spec 5.1: mtime(kit.yaml) > mtime(kit.lock.json) means hand-edited drift, so the
+    CLI must write the yaml first. Asserted on the `written` list, which is in write
+    order precisely because the CLI emits it unsorted (mtimes tie on coarse
+    filesystems, so an mtime assertion cannot fail)."""
     _seed_spine(tmp_path)
     assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
-    y = (tmp_path / ".claude/kit.yaml").stat().st_mtime_ns
-    l = (tmp_path / ".claude/kit.lock.json").stat().st_mtime_ns
-    assert l >= y
+    written = json.loads(capsys.readouterr().out)["written"]
+    assert written.index(".claude/kit.yaml") < written.index(".claude/kit.lock.json")
 
 
 def test_hook_scripts_are_executable(tmp_path, capsys):
@@ -2704,8 +2739,144 @@ def test_hook_chmod_is_exercised_with_a_synthetic_hook(tmp_path, monkeypatch):
         **real(cfg), ".claude/hooks/ownership-guard.sh": "#!/bin/sh\nexit 0\n"})
     _seed_spine(tmp_path)
     assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
-    assert os.access(tmp_path / ".claude/hooks/ownership-guard.sh", os.X_OK)
+    mode = (tmp_path / ".claude/hooks/ownership-guard.sh").stat().st_mode
+    assert mode & 0o111 == 0o111          # executable by everyone
+    assert mode & 0o600 == 0o600          # and still readable/writable by the owner
     assert not os.access(tmp_path / "CLAUDE.md", os.X_OK)
+
+
+def test_frozen_message_is_on_stderr_and_names_both_paths(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    for p in ("docs/adr", "docs/plan"):
+        (tmp_path / p).mkdir(parents=True)
+    (tmp_path / "docs/plan/README.md").write_text("S")
+    (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").write_text("A")
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--force"]) == 0
+    cap = capsys.readouterr()
+    assert "docs/plan/README.md" in cap.err
+    assert "docs/adr/0001-adopt-agentic-kit.md" in cap.err
+    assert "docs/plan/README.md" not in cap.out
+
+
+def test_refusal_names_every_clashing_path(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("x")
+    (tmp_path / "docs/strategy.md").write_text("y")
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 3
+    err = capsys.readouterr().err
+    assert "CLAUDE.md" in err and "docs/strategy.md" in err
+
+
+def test_a_directory_at_a_manifest_path_is_a_clash(tmp_path):
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").mkdir()
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 3
+
+
+def test_missing_profile_file_exits_two(tmp_path, capsys):
+    assert main(["verify", "--profile", str(tmp_path / "nope.yaml"),
+                 "--root", str(tmp_path)]) == 2
+    assert "FileNotFoundError" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("body", ["", "- a\n- b\n", "just a string\n"])
+def test_non_mapping_profile_exits_two(tmp_path, body):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(body)
+    assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
+
+
+def test_verify_on_a_clean_tree_exits_zero(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    assert main(["verify", "--profile", str(FIXTURE), "--root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_verify_root_is_honoured(tmp_path, monkeypatch):
+    """--root, not the cwd, decides where the inherited docs are looked for."""
+    (tmp_path / "proj").mkdir()
+    _seed_spine(tmp_path / "proj")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert main(["verify", "--profile", str(FIXTURE), "--root", str(tmp_path / "proj")]) == 0
+    assert main(["verify", "--profile", str(FIXTURE), "--root", str(elsewhere)]) == 1
+
+
+# --- --rendered-on --------------------------------------------------------------
+
+def test_rendered_on_reaches_the_adr_and_the_lock(tmp_path):
+    _seed_spine(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--rendered-on", "2031-02-03"]) == 0
+    assert "2031-02-03" in (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").read_text()
+    assert "2031-02-03" in (tmp_path / ".claude/kit.lock.json").read_text()
+
+
+@pytest.mark.parametrize("bad", ["not-a-date", "2031-13-45", ""])
+def test_bad_rendered_on_exits_two_and_writes_nothing(tmp_path, capsys, bad):
+    _seed_spine(tmp_path)
+    before = _tree(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--rendered-on", bad]) == 2
+    assert repr(bad) in capsys.readouterr().err
+    assert _tree(tmp_path) == before
+
+
+# --- write failures: exit 4 -----------------------------------------------------
+
+def test_write_failure_on_a_readonly_directory_exits_four(tmp_path, capsys):
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    _seed_spine(tmp_path)
+    agents = tmp_path / ".claude/agents"
+    agents.mkdir(parents=True)
+    agents.chmod(0o555)
+    try:
+        rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)])
+    finally:
+        agents.chmod(0o755)
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert ".claude/agents/" in err and "PermissionError" in err
+    assert "CLAUDE.md" in err            # an already-written file is listed
+    assert "--force" in err
+
+
+def test_write_failure_on_a_directory_where_a_file_belongs_exits_four(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    (tmp_path / ".claude/agents/backend.md").mkdir(parents=True)
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--force"])
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert "write failed at .claude/agents/backend.md" in err
+    assert "IsADirectoryError" in err
+    assert ".claude/kit.lock.json" in err   # written before the failure, so listed
+    assert "--force" in err
+
+
+def test_attribute_error_inside_validation_exits_two(tmp_path, capsys):
+    """roles[0].owns as a list of ints trips an AttributeError in from_dict, which is
+    neither a ValueError nor a TypeError."""
+    import yaml as _yaml
+    raw = _yaml.safe_load(FIXTURE.read_text())
+    raw["roles"][0]["owns"] = [1]
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(_yaml.safe_dump(raw))
+    assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
+    assert "AttributeError" in capsys.readouterr().err
+
+
+def test_write_failure_creating_a_parent_directory_exits_four(tmp_path, capsys):
+    """A regular file where a directory belongs fails in mkdir, not write_text."""
+    _seed_spine(tmp_path)
+    (tmp_path / ".claude").write_text("i am a file")
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert "write failed at .claude/" in err
+    assert "CLAUDE.md" in err
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2726,7 +2897,13 @@ __all__ = ["ConfigError", "GENERATE_ONCE", "KitConfig", "render", "verify"]
 
 ```python
 # plugins/agentic-kit/kitgen/src/kitgen/cli.py
-"""kitgen CLI. Exit codes: 0 ok, 1 verification problems, 2 bad profile, 3 refused.
+"""kitgen CLI. Exit codes:
+
+    0  ok
+    1  verification problems
+    2  bad profile (or bad --rendered-on)
+    3  refused to overwrite
+    4  write failed partway; the tree is incomplete and a retry needs --force
 
 Consumers invoke it without kitgen on PATH, via the plugin cache:
 
@@ -2738,6 +2915,7 @@ cache is a real failure mode to report, not to fall back from silently.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -2765,16 +2943,28 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--force", action="store_true",
                    help="overwrite generated files (generate-once files are still kept)")
 
-    v = sub.add_parser("verify", help="verify a rendered kit against its profile")
+    v = sub.add_parser("verify", help="check that the profile renders a consistent kit and that its "
+                          "inherited docs are present on disk")
     v.add_argument("--profile", type=Path, required=True)
     v.add_argument("--root", type=Path, required=True)
 
     args = parser.parse_args(argv)
 
+    # `is not None`, not truthiness: an explicit empty string is a caller mistake, not
+    # "unset". The ADR is generate-once, so a bad stamp would be permanent.
+    rendered_on = getattr(args, "rendered_on", None)
+    if rendered_on is not None:
+        try:
+            datetime.date.fromisoformat(rendered_on)
+        except ValueError:
+            print(f"invalid --rendered-on {rendered_on!r}: expected an ISO date "
+                  "(YYYY-MM-DD)", file=sys.stderr)
+            return 2
+
     try:
         raw = yaml.safe_load(args.profile.read_text())
-        if getattr(args, "rendered_on", None):
-            raw["rendered_on"] = args.rendered_on
+        if rendered_on is not None:
+            raw["rendered_on"] = rendered_on
         cfg = KitConfig.from_dict(raw)
         manifest = render(cfg)
     except (ValueError, KeyError, TypeError, AttributeError, OSError,
@@ -2793,44 +2983,60 @@ def main(argv: list[str] | None = None) -> int:
             print(p)
         return 1 if problems else 0
 
-    if args.dry_run:
-        print(json.dumps({"manifest": sorted(manifest)}, indent=2))
-        return 0
-
     # Verify BEFORE touching the filesystem: a half-written kit is worse than none.
+    # This runs for --dry-run too, so a preview has the same verdict as the real run.
     problems = verify(manifest, cfg, project_root=args.out)
     if problems:
         for p in problems:
             print(p, file=sys.stderr)
         return 1
 
-    if not args.force:
-        clashes = [p for p in manifest if (args.out / p).exists()]
-        if clashes:
-            print(f"refusing to overwrite: {sorted(clashes)}", file=sys.stderr)
-            return 3
-    else:
+    # Directories count as clashes too (.exists(), not .is_file()).
+    clashes = sorted(p for p in manifest if (args.out / p).exists())
+    frozen: list[str] = []
+    if args.force:
         # --force still must not clobber these. The plan file IS the dispatch state
         # after the first task, and ADR 0001 stamps the install's date and kit
         # version -- re-rendering it restamps an Accepted record with a later
         # install's facts, falsifying the thing the ADR exists to preserve.
-        frozen = sorted(p for p in GENERATE_ONCE
-                        if p in manifest and (args.out / p).exists())
-        if frozen:
-            print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
-            for p in frozen:
-                del manifest[p]
+        frozen = sorted(p for p in GENERATE_ONCE if p in clashes)
+        clashes = []
 
-    # Manifest insertion order is the write order: kit.yaml before kit.lock.json
-    # (spec 5.1 reads mtime(kit.yaml) > mtime(lock) as drift). Do not sort.
+    if args.dry_run:
+        print(json.dumps({"manifest": sorted(manifest),
+                          "clashes": clashes,
+                          "frozen": frozen}, indent=2))
+        return 3 if clashes else 0
+
+    if clashes:
+        print(f"refusing to overwrite: {clashes}", file=sys.stderr)
+        return 3
+    if frozen:
+        print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
+        for p in frozen:
+            del manifest[p]
+
+    # Manifest insertion order is the write order AND the order of the emitted
+    # `written` list (tests assert on it): kit.yaml before kit.lock.json (spec 5.1
+    # reads mtime(kit.yaml) > mtime(lock) as drift). Do not sort.
+    written: list[str] = []
     for path, content in manifest.items():
         target = args.out / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-        if path.startswith(HOOKS_PREFIX):
-            target.chmod(target.stat().st_mode | 0o111)   # hooks are inert unless +x
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+            if path.startswith(HOOKS_PREFIX):
+                target.chmod(target.stat().st_mode | 0o111)   # inert unless +x
+        except OSError as exc:
+            print(f"write failed at {path}: {type(exc).__name__}: {exc}\n"
+                  f"already written ({len(written)}): {written}\n"
+                  "the tree is incomplete. Fix the cause and re-run with --force; "
+                  "a plain retry will refuse (exit 3) because those files now exist.",
+                  file=sys.stderr)
+            return 4
+        written.append(path)
 
-    print(json.dumps({"written": list(manifest)}, indent=2))
+    print(json.dumps({"written": written}, indent=2))
     return 0
 ```
 
