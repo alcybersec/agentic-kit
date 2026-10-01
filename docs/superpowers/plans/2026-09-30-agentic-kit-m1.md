@@ -3030,6 +3030,316 @@ git commit -m "feat(hooks): pre-file-guard denying profile secret paths"
 
 ---
 
+## Task 12b: per-role ownership guard
+
+Exclusive file-path ownership is the kit's headline claim and until now nothing enforced it: the
+generated `settings.json` grants `Edit` at the tool level for every path, role cards state boundaries
+in prose, and `pre-file-guard` polices only `secrets`. A role editing another role's tree was caught
+by review, or not at all.
+
+Subagent frontmatter supports a per-agent `hooks:` block — verified against the subagents
+documentation: *"Define hooks directly in the subagent's markdown file. These hooks only run while
+that specific subagent is active and are cleaned up when it finishes."* It supports `PreToolUse` with
+a matcher, and exit 2 blocks the call. So each role card can register a guard scoped to itself.
+
+**The rule, and why it does not block ordinary work.** The guard blocks a path only when it belongs to
+**another role**. An unowned path crosses nobody's boundary and is allowed — that is the single
+decision that keeps this from being unusable, because real trees are full of files the ownership map
+never mentions (`Makefile`, `pyproject.toml`, `README.md`, the docs spine). Verified against a
+70-case corpus over all three fixtures before being written here, with zero mismatches.
+
+Four paths are refused for every role regardless of the ownership map:
+
+| Path | Why |
+|---|---|
+| another role's `.claude/agent-memory/<role>/**` | memory is per-role and nobody else's to write |
+| `.claude/agents/**` | role cards are the installer's output, not an agent's input |
+| `spine.plan` | the plan says *subagents never edit this file*; they emit a handoff note |
+| a role's own `owns` globs | allowed, obviously — listed for completeness |
+
+**Not applied to the orchestrator.** It owns no paths, and it legitimately writes the dispatch state,
+the risk register and the gate bundles. `orchestrator.md.j2` gains no `hooks:` block.
+
+**Known hazard, documented rather than prevented.** If one role owns a broad test tree, every other
+role is blocked from writing tests — and the kit mandates test-first for logic. In the
+`services_layout` fixture `qa` owns `tests/**`, so `backend` writing `tests/unit/test_api.py` is
+blocked. That is *consistent* with that ownership map, and the deny message names the owner and says
+what to do, but it is a trap when retrofitting a real project. §8.4 now says test paths should be
+owned by whoever owns the code under test, or left unowned.
+
+**Why the script is rendered into the project rather than shipped in the plugin.** A project's role
+card cannot reference `${CLAUDE_PLUGIN_ROOT}` — that variable is for plugin-defined hooks, and these
+cards live in the target repo's `.claude/agents/`. So the guard is a rendered file. It also means
+ownership enforcement keeps working in a checkout where the plugin is not installed.
+
+**Files:**
+- Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/ownership-guard.sh.j2`
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/templates/role.md.j2` (frontmatter `hooks:` block)
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/render.py` (one `SINGLETONS` entry)
+- Modify: `plugins/agentic-kit/kitgen/tests/test_render.py` (`expected_paths`)
+- Test: `plugins/agentic-kit/kitgen/tests/test_ownership_guard.py`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# plugins/agentic-kit/kitgen/tests/test_ownership_guard.py
+"""The guard is the only mechanical enforcement of exclusive path ownership.
+
+Every case here was validated against a prototype before the implementation was
+written, so a failure means the implementation diverged from a verified design.
+"""
+import json
+import re
+import subprocess
+
+import pytest
+
+from kitgen.render import render
+
+FIXTURES = ["greenfield_prd", "python_monolith", "services_layout"]
+GUARD = ".claude/hooks/ownership-guard.sh"
+
+
+def _install(tmp_path, cfg):
+    """Write the rendered guard and lock into a throwaway project."""
+    man = render(cfg)
+    (tmp_path / ".claude/hooks").mkdir(parents=True)
+    script = tmp_path / GUARD
+    script.write_text(man[GUARD])
+    script.chmod(0o755)
+    (tmp_path / ".claude/kit.lock.json").write_text(man[".claude/kit.lock.json"])
+    return script
+
+
+def _run(script, tmp_path, role, rel):
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": str(tmp_path / rel)},
+               "cwd": str(tmp_path)}
+    return subprocess.run(
+        ["bash", str(script), role], input=json.dumps(payload),
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(tmp_path)})
+
+
+# (fixture, role, path, expected) -- expected True means BLOCKED
+CASES = [
+    # a role's own territory is always allowed
+    ("python_monolith", "backend", "src/ledger/api/routes.py", False),
+    ("python_monolith", "data", "alembic/versions/0003_x.py", False),
+    ("services_layout", "frontend", "services/ui/App.tsx", False),
+    ("greenfield_prd", "safety", "tests/safety/test_floor.py", False),
+    # another role's territory is blocked
+    ("python_monolith", "backend", "src/ledger/models/entry.py", True),
+    ("python_monolith", "architect", "src/ledger/api/routes.py", True),
+    ("services_layout", "worker", "services/api/main.py", True),
+    ("greenfield_prd", "qa", "tests/safety/test_floor.py", True),
+    # unowned paths are allowed -- this is what keeps the guard usable
+    ("python_monolith", "backend", "Makefile", False),
+    ("python_monolith", "backend", "README.md", False),
+    ("python_monolith", "backend", "tests/unit/test_routes.py", False),
+    ("python_monolith", "backend", "docs/design.md", False),
+    ("services_layout", "devops", "pyproject.toml", False),
+    ("greenfield_prd", "devops", "src/nimbus/sync.py", False),
+    # a role's own memory is allowed, another role's is not
+    ("python_monolith", "backend", ".claude/agent-memory/backend/MEMORY.md", False),
+    ("python_monolith", "backend", ".claude/agent-memory/backend/a-fact.md", False),
+    ("python_monolith", "backend", ".claude/agent-memory/data/MEMORY.md", True),
+    # role cards and dispatch state are never an agent's to write
+    ("python_monolith", "backend", ".claude/agents/backend.md", True),
+    ("python_monolith", "backend", ".claude/agents/data.md", True),
+    ("python_monolith", "qa", "docs/plan/README.md", True),
+    ("services_layout", "devops", "docs/plan/README.md", True),
+]
+
+
+@pytest.mark.parametrize("fixture,role,rel,blocked", CASES)
+def test_ownership_guard_verdict(tmp_path, load_fixture, fixture, role, rel, blocked):
+    script = _install(tmp_path, load_fixture(fixture))
+    r = _run(script, tmp_path, role, rel)
+    assert (r.returncode == 2) is blocked, (fixture, role, rel, r.returncode, r.stderr)
+    if blocked:
+        assert r.stderr.strip(), "a block must explain itself"
+
+
+def test_a_block_names_the_owner_and_the_remedy(tmp_path, load_fixture):
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    r = _run(script, tmp_path, "backend", "src/ledger/models/entry.py")
+    assert r.returncode == 2
+    assert "data" in r.stderr
+    assert "request" in r.stderr.lower() or "split" in r.stderr.lower()
+
+
+def test_the_guard_is_inert_without_a_lock(tmp_path, load_fixture):
+    """Same blast-radius rule as every other hook in this kit."""
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    (tmp_path / ".claude/kit.lock.json").unlink()
+    assert _run(script, tmp_path, "backend", "src/ledger/models/entry.py").returncode == 0
+
+
+def test_an_absolute_path_outside_the_project_is_not_policed(tmp_path, load_fixture):
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": "/etc/hosts"},
+               "cwd": str(tmp_path)}
+    r = subprocess.run(["bash", str(script), "backend"], input=json.dumps(payload),
+                       capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(tmp_path)})
+    assert r.returncode == 0
+
+
+def test_every_role_card_registers_the_guard(load_fixture):
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        man = render(cfg)
+        for r in cfg.roles:
+            card = man[f".claude/agents/{r.name}.md"]
+            fm = re.match(r"^---\n(.*?)\n---\n", card, re.S).group(1)
+            assert "hooks:" in fm, (name, r.name)
+            assert "ownership-guard.sh" in fm, (name, r.name)
+            assert f'ownership-guard.sh" {r.name}' in fm, (name, r.name)
+
+
+def test_the_orchestrator_card_does_not_register_the_guard(load_fixture):
+    """It owns no paths and legitimately writes the plan, the risk register and the
+    gate bundles. Guarding it would block its actual job."""
+    for name in FIXTURES:
+        card = render(load_fixture(name))[".claude/agents/orchestrator.md"]
+        assert "ownership-guard" not in card, name
+
+
+def test_the_guard_matcher_covers_every_file_mutating_tool(load_fixture):
+    card = render(load_fixture("python_monolith"))[".claude/agents/data.md"]
+    for tool in ("Edit", "Write", "NotebookEdit"):
+        assert tool in card
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_ownership_guard.py -v`
+Expected: FAIL — `KeyError: '.claude/hooks/ownership-guard.sh'`, since the template is not yet in
+`SINGLETONS`.
+
+- [ ] **Step 3: Write the guard template**
+
+`templates/ownership-guard.sh.j2` — note this is rendered **verbatim**, with no Jinja
+substitution other than nothing at all: the role name arrives as `$1` so one script serves every
+role, and the ownership map is read from the lock at run time rather than baked in, so
+`/kit-upgrade` changing the map takes effect without rewriting the script.
+
+```jinja
+#!/usr/bin/env bash
+# Per-role ownership guard. Registered by each role card's frontmatter `hooks:`
+# block, which passes that role's name as $1. Generated by agentic-kit --
+# re-render with /kit-upgrade rather than editing by hand.
+#
+# Blocks a path only when it belongs to ANOTHER role. An unowned path crosses
+# nobody's boundary and is allowed: real trees are full of files the ownership
+# map never mentions, and blocking those would make this unusable.
+set -uo pipefail
+
+role="${1:-}"
+[ -n "$role" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+
+input=$(cat)
+[ -n "$input" ] || exit 0
+printf '%s' "$input" | jq -e . >/dev/null 2>&1 || exit 0
+
+root="${CLAUDE_PROJECT_DIR:-}"
+[ -n "$root" ] || root=$(printf '%s' "$input" | jq -r '.cwd // empty')
+[ -n "$root" ] && [ -d "$root" ] || exit 0
+
+lock="$root/.claude/kit.lock.json"
+[ -f "$lock" ] || exit 0
+jq -e . "$lock" >/dev/null 2>&1 || exit 0
+
+path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')
+[ -n "$path" ] || exit 0
+
+rel="$path"
+case "$rel" in
+  "$root"/*) rel="${rel#"$root"/}" ;;
+  /*)        exit 0 ;;   # outside the project: not ours to police
+esac
+rel="${rel#./}"
+
+deny() {
+  jq -nc --arg m "$1" \
+    '{hookSpecificOutput: {permissionDecision: "deny"}, systemMessage: $m}' >&2
+  exit 2
+}
+
+# This role's own memory is always writable.
+case "$rel" in ".claude/agent-memory/$role/"*) exit 0 ;; esac
+
+# Refused for every role, whatever the ownership map says.
+case "$rel" in
+  .claude/agent-memory/*)
+      owner="${rel#.claude/agent-memory/}"; owner="${owner%%/*}"
+      deny "Blocked: ${rel} is ${owner}'s agent memory. Keep your own facts in .claude/agent-memory/${role}/." ;;
+  .claude/agents/*)
+      deny "Blocked: role cards are generated by the installer, not written by agents. Ask the user to re-run /kit-upgrade if a role needs changing." ;;
+esac
+plan=$(jq -r '.spine.plan // empty' "$lock")
+if [ -n "$plan" ] && [ "$rel" = "${plan#./}" ]; then
+  deny "Blocked: ${rel} is the Orchestrator's dispatch state. Subagents never edit it -- emit a handoff note with /handoff instead."
+fi
+
+# Owned by me?
+while IFS= read -r pat; do
+  [ -n "$pat" ] || continue
+  # shellcheck disable=SC2254  # the pattern is a glob on purpose
+  case "$rel" in $pat) exit 0 ;; esac
+done < <(jq -r --arg r "$role" '.roles[] | select(.name==$r) | .owns[]' "$lock")
+
+# Owned by another role? Unowned paths are allowed.
+while IFS= read -r line; do
+  other="${line%%|*}"; pat="${line#*|}"
+  [ -n "$pat" ] || continue
+  # shellcheck disable=SC2254
+  case "$rel" in
+    $pat) deny "Blocked: ${rel} is owned by \`${other}\`, not \`${role}\`. Request the change from ${other}, or ask the Orchestrator to split the task along the boundary." ;;
+  esac
+done < <(jq -r --arg r "$role" '.roles[] | select(.name!=$r) | .name as $n | .owns[] | "\($n)|\(.)"' "$lock")
+
+exit 0
+```
+
+- [ ] **Step 4: Add the frontmatter block to `role.md.j2`**
+
+Insert into the frontmatter, after `memory: project`:
+
+```jinja
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|NotebookEdit|MultiEdit"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ownership-guard.sh" {{ role.name }}
+```
+
+`orchestrator.md.j2` is **not** changed.
+
+- [ ] **Step 5: Wire it into `render()`**
+
+Add `"ownership-guard.sh.j2": ".claude/hooks/ownership-guard.sh",` to `SINGLETONS`, and
+`".claude/hooks/ownership-guard.sh"` to `expected_paths` in `tests/test_render.py`.
+
+Note the guard is rendered with the executable bit unset — `render()` returns strings, not modes. The
+CLI (Task 9) must `chmod +x` any path under `.claude/hooks/`; add that there and a test for it.
+
+- [ ] **Step 6: Run the suite**
+
+Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/ -v`
+Expected: PASS, including all 21 parametrised guard verdicts.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add plugins/agentic-kit/kitgen/src/kitgen/templates/ownership-guard.sh.j2 plugins/agentic-kit/kitgen/src/kitgen/templates/role.md.j2 plugins/agentic-kit/kitgen/src/kitgen/render.py plugins/agentic-kit/kitgen/tests/test_render.py plugins/agentic-kit/kitgen/tests/test_ownership_guard.py
+git commit -m "feat(kitgen): enforce exclusive path ownership per role"
+```
+
+---
+
 ## Task 13: `post-edit-format` and `subagent-stop-check`
 
 **Files:**

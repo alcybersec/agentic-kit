@@ -305,11 +305,9 @@ these hooks match on **command strings**, so neither is a sandbox:
   narrower and specific — a reader Claude Code does not recognise (`xxd`, `base64`, `strings`), a
   command that does not name the file (`grep -r TOKEN .`), and any interpreter. `pre-bash-guard`'s
   secret check exists for exactly that remainder, not because path denies are blind to shell.
-- **Exclusive file-path ownership — the kit's headline claim — is enforced by nothing mechanical.**
-  `settings.json` grants `Edit` at the tool level for every path, role cards state boundaries in
-  prose, and `pre-file-guard` polices only `secrets`. A role editing another role's tree is caught by
-  review, or not at all. This is the largest item on this list and the one most likely to be mistaken
-  for a guarantee.
+- Exclusive file-path ownership **is** enforced, by the per-role guard in §6.5 — but only against the
+  file tools. A role can still reach another role's tree through Bash (`sed -i`, a script), because
+  that guard matches `Edit|Write|NotebookEdit|MultiEdit` and not command strings.
 
 What the deny list does have going for it is precedence: "deny rules from any scope are evaluated
 before allow rules", and a hook cannot loosen them — "Claude Code evaluates deny and ask rules
@@ -335,7 +333,33 @@ with `kind: none` neither is. The rendered CLAUDE.md states the chosen forge's C
 rule not to propose the other's CI system. `mirror` names a push-mirror that is not the tracker:
 fetching from it is allowed, opening issues or PRs on it is not.
 
-### 6.4 Future MCP wrapper
+### 6.4 Per-role ownership guard
+
+`.claude/hooks/ownership-guard.sh` is rendered into the project and registered by each role card's
+frontmatter `hooks:` block, which passes that role's name as `$1`. Frontmatter hooks "only run while
+that specific subagent is active and are cleaned up when it finishes", so the guard is automatically
+scoped to one role.
+
+It blocks a path **only when another role owns it**. An unowned path crosses nobody's boundary and is
+allowed; without that rule the guard would block `Makefile`, `pyproject.toml`, `README.md` and the
+docs spine, and be switched off within a day. Validated against a 70-case corpus over all three
+fixtures before implementation.
+
+Refused for every role regardless of the map: another role's `agent-memory`, any `.claude/agents/**`
+card, and `spine.plan` (subagents emit a handoff note instead).
+
+**Not registered on the orchestrator**, which owns no paths and legitimately writes the dispatch
+state, the risk register and the gate bundles.
+
+It is rendered rather than shipped in the plugin because a project's role card cannot reference
+`${CLAUDE_PLUGIN_ROOT}`; the side benefit is that ownership enforcement survives in a checkout where
+the plugin is not installed.
+
+**Hazard worth stating:** if one role owns a broad test tree, every other role is blocked from
+writing tests while the kit mandates test-first. §8.4 therefore says test paths should be owned by
+whoever owns the code under test, or left unowned.
+
+### 6.5 Future MCP wrapper
 
 Because `render` is pure (§4.4), an MCP server exposing `kit_bootstrap`/`kit_retrofit` in two stages
 (`plan` returns the detection spec, interview and facts schema; `render` returns the manifest) is a
@@ -445,6 +469,12 @@ become permission rules: a floor is an invariant ("the safety tier is append-onl
 200 ms"), not a command string, and nothing in the rendered `settings.json` reads `floors`. The installer MUST block on the user's answer rather than guess.
 
 ### 8.4 Role roster derivation
+
+**Test paths need deliberate ownership.** The per-role guard (§6.4) blocks a role from writing a path
+another role owns, so giving one role a broad `tests/**` prevents every other role from writing tests
+— while the kit mandates test-first for logic. Either give each role the test subtree for its own
+code, or leave test paths unowned. Do not give one role the whole tree unless tests really are that
+role's exclusive job.
 
 Always present: `architect`, `devops`, `qa`, and a veto role named `safety`. Added when detected:
 `data` (migrations or ORM present), `frontend` (a JS/TS application directory). Domain roles are
