@@ -169,3 +169,79 @@ def test_stop_check_deny_message_says_what_to_emit(tmp_path):
     msg = json.loads(stop(p, [asst("done")]).stderr)["systemMessage"]
     for word in ("/handoff", "TASK", "COMPLETE", "OUTPUTS", "TESTS"):
         assert word in msg
+
+
+# --- harness payload: stop_hook_active, agent_transcript_path, last_assistant_message ---
+
+def stop_payload(p, tmp_name="x", **fields):
+    return run_hook("subagent-stop-check.sh", {"cwd": str(p), **fields}, p)
+
+
+def write_t(p, name, text):
+    f = p / name
+    f.write_text(json.dumps(asst(text)) + "\n")
+    return str(f)
+
+
+def test_stop_hook_active_exits_zero_with_no_note_anywhere(tmp_path):
+    p = make_project(tmp_path)
+    t = write_t(p, "a.jsonl", "nothing here")
+    r = stop_payload(p, stop_hook_active=True, agent_transcript_path=t,
+                     last_assistant_message="nothing here")
+    assert r.returncode == 0 and r.stderr == ""
+    # and it is the flag doing it, not the absence of evidence
+    assert stop_payload(p, stop_hook_active=False, last_assistant_message="x").returncode == 2
+
+
+def test_agent_transcript_with_note_passes(tmp_path):
+    p = make_project(tmp_path)
+    t = write_t(p, "a.jsonl", NOTE)
+    assert stop_payload(p, agent_transcript_path=t).returncode == 0
+
+
+def test_subagent_transcript_without_note_blocks_even_if_parent_has_one(tmp_path):
+    """The false negative: the orchestrator's transcript mentions a note, the subagent's does not."""
+    p = make_project(tmp_path)
+    sub = write_t(p, "sub.jsonl", "all done, trust me")
+    parent = write_t(p, "parent.jsonl", NOTE)
+    r = stop_payload(p, agent_transcript_path=sub, transcript_path=parent)
+    assert r.returncode == 2
+
+
+def test_parent_transcript_is_only_a_fallback(tmp_path):
+    p = make_project(tmp_path)
+    assert stop_payload(p, transcript_path=write_t(p, "p.jsonl", NOTE)).returncode == 0
+    assert stop_payload(p, transcript_path=write_t(p, "q.jsonl", "no")).returncode == 2
+    # agent path set but unreadable -> falls back to the parent's
+    assert stop_payload(p, agent_transcript_path=str(p / "gone"),
+                        transcript_path=write_t(p, "r.jsonl", NOTE)).returncode == 0
+
+
+def test_last_assistant_message_is_primary_and_skips_the_transcript(tmp_path):
+    p = make_project(tmp_path)
+    with_note = write_t(p, "n.jsonl", NOTE)
+    r = stop_payload(p, last_assistant_message="finished, no note",
+                     agent_transcript_path=with_note)
+    assert r.returncode == 2
+    assert stop_payload(p, last_assistant_message="wrap up\n\n" + NOTE,
+                        agent_transcript_path=write_t(p, "e.jsonl", "no")).returncode == 0
+    # empty message -> falls back to the transcript
+    assert stop_payload(p, last_assistant_message="",
+                        agent_transcript_path=with_note).returncode == 0
+
+
+def test_documented_limit_a_quoted_note_on_its_own_line_passes(tmp_path):
+    """Undecidable from text alone; accepted. Pinned so closing it is a decision."""
+    p = make_project(tmp_path)
+    msg = "The format looks like this:\nTASK M0-1 — COMPLETE\nOUTPUTS: ..."
+    assert stop_payload(p, last_assistant_message=msg).returncode == 0
+
+
+@pytest.mark.parametrize("fields", [
+    {"stop_hook_active": True},
+    {"last_assistant_message": "no note"},
+    {"agent_transcript_path": "/nope", "transcript_path": "/nope"},
+])
+def test_stop_check_is_inert_with_no_lock_whatever_fields_are_present(tmp_path, fields):
+    r = run_hook("subagent-stop-check.sh", {"cwd": str(tmp_path), **fields}, tmp_path)
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""

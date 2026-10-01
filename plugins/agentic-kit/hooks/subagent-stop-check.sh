@@ -11,26 +11,40 @@ _kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_
 source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
-transcript=$(kit_in '.transcript_path')
-[ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
+# The harness re-fires this hook after a block; blocking again only burns turns until
+# its own cap (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP). Its guidance: succeed while this is true.
+[ "$(kit_in '.stop_hook_active')" != "true" ] || exit 0
 
-# The assistant's own text, one real line per line. JSONL entries are reduced to
-# the text blocks of assistant messages, so a note carried as an escaped-newline
-# string is un-escaped, and neither the dispatch prompt (user) nor a note typed
-# into a file by a tool call (tool_use) counts as an emitted note. A line that is
-# not JSON passes through as-is, so a plain-text transcript is still searched.
-text=$(jq -R -r '
-  . as $l | (try ($l | fromjson) catch null) as $o
-  | if ($o | type) != "object" then $l
-    else
-      (($o.role // $o.message.role) // "") as $role
-      | if $role != "assistant" then empty
-        else ($o.content // $o.message.content // empty)
-          | if type == "string" then .
-            elif type == "array" then .[] | select(type == "object" and .type == "text") | .text | strings
-            else empty end
-        end
-    end' "$transcript" 2>/dev/null) || text=""
+# Source 1 (primary): the subagent's final message, handed over directly. No transcript
+# shape to assume, and it is the text the agent actually ended on.
+# Source 2: the subagent's OWN transcript (agent_transcript_path). `transcript_path` is the
+# PARENT session's and is only a last resort: it can satisfy or fail the check on the
+# orchestrator's words rather than the subagent's.
+text=$(kit_in '.last_assistant_message | strings')
+if [ -z "$text" ]; then
+  transcript=$(kit_in '.agent_transcript_path | strings')
+  { [ -n "$transcript" ] && [ -f "$transcript" ]; } || transcript=$(kit_in '.transcript_path | strings')
+  [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
+
+  # The assistant's own text, one real line per line. JSONL entries are reduced to the
+  # text blocks of assistant messages, so a note carried as an escaped-newline string is
+  # un-escaped, and neither the dispatch prompt (user) nor a note typed into a file by a
+  # tool call (tool_use) counts. A line that is not JSON passes through as-is. Two entry
+  # shapes are handled: {role,content:str} (tested) and {message:{role,content:[{type:
+  # text}]}} (assumed from Claude Code's format, UNVERIFIED against a live transcript).
+  text=$(jq -R -r '
+    . as $l | (try ($l | fromjson) catch null) as $o
+    | if ($o | type) != "object" then $l
+      else
+        (($o.role // $o.message.role) // "") as $role
+        | if $role != "assistant" then empty
+          else ($o.content // $o.message.content // empty)
+            | if type == "string" then .
+              elif type == "array" then .[] | select(type == "object" and .type == "text") | .text | strings
+              else empty end
+          end
+      end' "$transcript" 2>/dev/null) || text=""
+fi
 
 # Header at the start of a line (markdown bold or heading marks tolerated); the
 # separator may be an em dash, en dash or hyphen. The ID must be real, so the
