@@ -2427,7 +2427,41 @@ git commit -m "feat(kitgen): cross-reference verifier over rendered manifests"
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/cli.py`
 - Modify: `plugins/agentic-kit/kitgen/src/kitgen/__init__.py` (exists from Task 1, currently empty)
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/render.py` (add `GENERATE_ONCE`; see Step 0)
 - Test: `plugins/agentic-kit/kitgen/tests/test_cli.py`
+
+- [ ] **Step 0: add `GENERATE_ONCE` to `render.py`**
+
+Task 4's block in this plan declares it, but Task 4 shipped before that entry was added, so the
+committed `render.py` does not have it and `cli.py` would fail with `NameError` on the `--force` path.
+Add beside `SINGLETONS`:
+
+```python
+# Written on a fresh install and never re-rendered over: see design spec §7.1a.
+# plan/README.md is pure dispatch state after the first task, and adr-0001 stamps
+# the install's date and kit version.
+GENERATE_ONCE = frozenset({
+    "docs/plan/README.md",
+    "docs/adr/0001-adopt-agentic-kit.md",
+})
+```
+
+Then add a contract test to `tests/test_render.py`, because nothing currently detects this class of
+drift — `scripts/check_plan_sync.py` covers only the twelve templates:
+
+```python
+def test_render_module_contract():
+    """SINGLETONS and GENERATE_ONCE are referenced by the CLI and by M2's upgrade
+    skill, so pin them here. The plan's Task 4 block once declared GENERATE_ONCE while
+    the committed module lacked it, which nothing caught."""
+    from kitgen.render import GENERATE_ONCE, SINGLETONS
+    assert len(SINGLETONS) == 10, sorted(SINGLETONS)
+    assert GENERATE_ONCE == {
+        "docs/plan/README.md",
+        "docs/adr/0001-adopt-agentic-kit.md",
+    }
+    assert GENERATE_ONCE <= set(SINGLETONS.values())
+```
 
 - [ ] **Step 1: Write the failing test**
 
