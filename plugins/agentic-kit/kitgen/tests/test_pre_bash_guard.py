@@ -260,3 +260,27 @@ def test_a_substring_match_does_not_cause_a_false_block(tmp_path):
                  "grep -r 'git stash' docs/",
                  "ls github-notes/"]:
         assert run_hook(HOOK, bash_payload(safe, p), p).returncode == 0, safe
+
+
+# --- the template exemption, shared with pre-file-guard ----------------------
+
+@pytest.mark.parametrize("command", [
+    "cat secrets/prod.yaml.example",
+    "cp secrets/prod.yaml.example secrets/prod.yaml",
+    "diff secrets/compose.env.dist secrets/compose.env.sample",
+])
+def test_a_command_naming_only_templates_is_allowed(tmp_path, command):
+    p = make_project(tmp_path, secrets=["./secrets/**"])
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "cat secrets/prod.yaml",
+    "cat secrets/prod.yaml.example secrets/prod.yaml",
+    "base64 secrets/prod.yaml.example.bak",
+])
+def test_a_command_naming_a_real_secret_is_still_blocked(tmp_path, command):
+    p = make_project(tmp_path, secrets=["./secrets/**"])
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 2, (command, r.stdout, r.stderr)

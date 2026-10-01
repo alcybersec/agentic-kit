@@ -216,6 +216,10 @@ check_secrets() {
       esac
     done
     [ -n "$tok" ] || continue
+    # Same exemption as pre-file-guard: the template is what the deny message
+    # recommends. The `cp x.example y` special case above stays, because it has to
+    # judge the DESTINATION too.
+    kit_is_template "$tok" && continue
     for pattern in "${secrets[@]}"; do
       pat="${pattern#./}"
       [ -n "$pat" ] || continue

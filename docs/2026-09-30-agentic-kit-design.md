@@ -329,6 +329,13 @@ these hooks match on **command strings**, so neither is a sandbox:
   narrower and specific — a reader Claude Code does not recognise (`xxd`, `base64`, `strings`), a
   command that does not name the file (`grep -r TOKEN .`), and any interpreter. `pre-bash-guard`'s
   secret check exists for exactly that remainder, not because path denies are blind to shell.
+- The hooks exempt a committed `*.example`, `*.sample`, `*.template` or `*.dist` file from the secret
+  match (added 2026-10-01, fix 0.7: a `./secrets/**` pattern swallowed `secrets/prod.yaml.example`, so
+  the deny message recommended a path the same guard refused). **The deny rules do not**, and cannot:
+  `Read(./secrets/**)` covers the template too, deny is evaluated before allow, and no negation is
+  available to carve an exception. So in a project whose `secrets` cover a directory, the template is
+  readable to the hooks and still refused by the permission layer. Keep project templates outside the
+  secret directory — `./.env.example` beside `./.env` is unaffected, since `./.env` does not match it.
 - Exclusive file-path ownership **is** enforced, by the per-role guard in §6.5 — but only against the
   file tools. A role can still reach another role's tree through Bash (`sed -i`, a script), because
   that guard matches `Edit|Write|NotebookEdit|MultiEdit` and not command strings.

@@ -18,6 +18,11 @@ path=$(kit_in '.tool_input.file_path | strings')
 
 kit_candidates "$path" "$(kit_in '.cwd | strings')" || exit 0   # outside the project
 
+# A committed *.example / *.sample / *.template / *.dist file is not the secret --
+# it is the very thing the deny message below tells the agent to read instead, so
+# blocking it recommended a path this guard refused.
+kit_drop_templates || exit 0
+
 patterns=$(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
 if kit_match_glob "$patterns"; then
   kit_deny "Blocked: ${KIT_MATCHED_REL} matches the secret path pattern '${KIT_MATCHED}' (profile \"secrets\" in .claude/kit.yaml). Do not read, edit or print it. If you need the file's shape, use the committed .example template (e.g. .env.example); if you need a value, ask the user to supply it."

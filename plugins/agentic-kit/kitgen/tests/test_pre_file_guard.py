@@ -137,3 +137,42 @@ def test_an_empty_or_missing_secrets_list_blocks_nothing(tmp_path):
     assert not blocked(p, "Read", str(p / ".env"))
     (p / ".claude/kit.lock.json").write_text("{}")
     assert not blocked(p, "Read", str(p / ".env"))
+
+
+# --- the template a deny message recommends must itself be readable ----------
+
+@pytest.mark.parametrize("rel", [
+    "secrets/prod.yaml.example",
+    "secrets/prod.yaml.sample",
+    "secrets/db/pw.txt.template",
+    "secrets/compose.env.dist",
+])
+def test_a_committed_template_under_a_secret_directory_is_readable(tmp_path, rel):
+    """`./secrets/**` swallowed its own template, so the deny message told the agent
+    to read the `.example` file and the same guard then refused it."""
+    p = make_project(tmp_path, ["./secrets/**"])
+    r = run_hook(HOOK, file_payload("Read", str(p / rel), p), p)
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("rel", [
+    "secrets/prod.yaml",
+    "secrets/prod.yaml.example.bak",   # the suffix must be last, not anywhere
+    "secrets/example/real.yaml",       # a directory named example is not a template
+    "secrets/.example",                # no stem: not the "<file>.example" convention
+])
+def test_the_template_exemption_does_not_widen_further(tmp_path, rel):
+    p = make_project(tmp_path, ["./secrets/**"])
+    r = run_hook(HOOK, file_payload("Read", str(p / rel), p), p)
+    assert r.returncode == 2, (rel, r.stdout, r.stderr)
+
+
+def test_a_template_named_symlink_to_a_secret_is_still_blocked(tmp_path):
+    """The exemption is applied per spelling, so the realpath candidate still
+    carries the real name and still matches."""
+    p = make_project(tmp_path, ["./.env"])
+    (p / ".env").write_text("TOKEN=x")
+    (p / "shape.env.example").symlink_to(p / ".env")
+    r = run_hook(HOOK, file_payload("Read", str(p / "shape.env.example"), p), p)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert ".env" in r.stderr

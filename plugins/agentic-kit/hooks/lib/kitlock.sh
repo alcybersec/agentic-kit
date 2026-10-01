@@ -106,6 +106,35 @@ kit_match_glob() {
   return 1
 }
 
+# kit_is_template <path> — true for a committed example/sample/template file.
+#
+# `./secrets/**` otherwise swallows `secrets/prod.yaml.example`, so the deny
+# message recommended reading a file the same deny blocked. Checked on the LAST
+# path component only: a directory named `examples/` holding real material is not
+# exempt, and neither is `.env.example.bak`.
+kit_is_template() {
+  # `?*` requires a stem: `*` matches the empty string, so a file named exactly
+  # `.example` would otherwise be exempt without being a template of anything.
+  case "${1##*/}" in
+    ?*.example|?*.sample|?*.template|?*.dist) return 0 ;;
+  esac
+  return 1
+}
+
+# kit_drop_templates — drop template spellings from KIT_CANDS, in place. Returns 1
+# when nothing is left to judge.
+#
+# Per candidate, deliberately: a symlink NAMED `x.example` that points at the real
+# secret keeps its realpath candidate and is still blocked by the target's name.
+kit_drop_templates() {
+  local keep=() c
+  for c in "${KIT_CANDS[@]}"; do
+    kit_is_template "$c" || keep+=("$c")
+  done
+  KIT_CANDS=(${keep[@]+"${keep[@]}"}); export KIT_CANDS
+  [ "${#KIT_CANDS[@]}" -gt 0 ]
+}
+
 # kit_deny <reason> — block the tool call, per the Claude Code hook contract.
 #
 # The reason is PROSE on STDERR, and the exit code does the blocking.
