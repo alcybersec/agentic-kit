@@ -149,6 +149,37 @@ that caused damage during the build.
 | 1.4 | Narrow `Bash({{ forge.cli }}:*)` to read verbs; add a `pre-bash-guard` branch denying `<cli> (issue\|mr\|pr) (create\|close\|edit\|merge)`. | `CLAUDE.md` requires confirmation for outward-facing actions; settings currently pre-approves them |
 | 1.5 | Stop-check must also accept the note from a `SubagentHandback` `tool_input` in the transcript. | Force-granted in auto mode on v2.1.271+, overriding `tools`/`disallowedTools`; the note is then in neither source the hook reads |
 
+### Phase 2 — test suite — **DONE 2026-10-02**
+
+`7fd8690` (2.2, 2.3), the loud-failure matrix in the commit before it (2.1), `4d74756` (2.4).
+Suite 599 -> 755 + 1 skipped. All five modules reach 100% line and branch coverage, which matters
+only as a by-product: One-off B's whole point was that 96% coverage sat beside a 69% kill rate.
+
+**Verification, since kill rate is the measure and coverage is not.** 18 targeted mutations of the
+exact functions the audit flagged — `_glob_prefix` keeping a trailing slash or a part-segment,
+`_overlaps` losing its equality case or its path-prefix boundary, every shape check disabled, every
+"I could not find this" branch in `verify()` neutered, the lock-mismatch and missing-path checks
+switched off — and all 18 are killed.
+
+**Two of this plan's own claims did not survive checking, and are corrected here:**
+
+- **2.2's premise is false.** "Two roles can currently declare the identical glob and validate" — they
+  cannot: `src/a/**` twice yields equal prefixes and `validate()` raises `ownership overlap`. I
+  reproduced all twelve rows of the truth table before writing it. The surviving mutants audit C
+  reported were real; the consequence it inferred from them was not. The table's first row exists to
+  keep the claim false.
+- **2.4's first half does not reproduce.** No test was deleted. Two independent checks disagree with
+  "8 tests proved unable to fail": coverage of the *test* files finds no never-executed assertion in
+  the suite at all (the three unexecuted lines are `pytest.skip` branches for root and for a role
+  absent from a fixture), and an AST scan for assertion-free and tautological tests finds eleven that
+  assert through a helper it cannot see through plus one real tautology,
+  `assert render(cfg) == render(cfg)`, which fails the moment render stops being deterministic and is
+  therefore doing its job. Deleting tests on an unverified report would have removed working coverage.
+
+This is the second and third time an **[R]** finding has not held up under direct checking (the first
+was §9.1's every-role-owns-a-test-path rule during the build, which an implementer refused). Treat the
+remaining **[R]** rows in Part 3 as leads, not facts.
+
 ### Phase 2 — test suite (3)
 
 | # | Fix | Kills |
