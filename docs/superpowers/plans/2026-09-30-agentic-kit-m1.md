@@ -3069,6 +3069,25 @@ git commit -m "feat(kitgen): CLI with render, verify, dry-run and overwrite refu
 
 ## Task 10: Hook library and the inertness rule
 
+> **Amended after implementation.** The blocks below are the first draft; the committed files are the
+> authority. Three defects in the draft would each have broken unrelated repositories, since a
+> plugin's hooks fire machine-wide:
+>
+> - `source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"` under `set -u` **exits 1 before any
+>   inertness check** when that variable is unset. The scripts now resolve the library from
+>   `${BASH_SOURCE[0]}` by parameter expansion — not `dirname`, which is itself unavailable when `PATH`
+>   is empty — and end the source with `|| exit 0`.
+> - `jq -e .` accepts `[]`, `"x"`, `42` and `null` as a lock. `kit_init` now requires a JSON **object**
+>   for both the payload and the lock.
+> - The draft's three inertness tests **could not prove the preamble is shared**: all four stubs exit 0
+>   whether or not they call `kit_init`, so deleting it from one would pass. There is now a structural
+>   test per hook plus a positive-path test that `kit_init` exports `KIT_LOCK` and that `kit_q`/`kit_in`
+>   work, driven once via `CLAUDE_PROJECT_DIR` and once via the payload's `.cwd`.
+>
+> 98 tests cover 23 inertness cases across all four hooks. Every one exits 0 with empty stdout **and
+> empty stderr** — a hook that merely exits 0 while printing `dirname: command not found` has still
+> put noise in someone else's project, which is how the `dirname` problem was caught.
+
 This is the task that keeps a globally installed plugin from disturbing every other repository on the machine.
 
 **Files:**
@@ -3114,10 +3133,11 @@ def file_payload(tool: str, file_path: str, cwd: Path) -> dict:
 # plugins/agentic-kit/kitgen/tests/test_hooks_inert.py
 """The blast-radius test: with no kit.lock.json every hook must be a no-op."""
 import json
+import subprocess
 
 import pytest
 
-from .hooks_conftest import bash_payload, file_payload, run_hook
+from .hooks_conftest import HOOKS, bash_payload, file_payload, run_hook
 
 ALL_HOOKS = ["pre-bash-guard.sh", "pre-file-guard.sh",
              "post-edit-format.sh", "subagent-stop-check.sh"]
@@ -3150,6 +3170,121 @@ def test_hook_is_inert_when_the_lock_is_unparseable(hook, bare_project):
 def test_hook_is_inert_on_empty_stdin(hook, bare_project):
     r = run_hook(hook, {}, bare_project)
     assert r.returncode == 0, (hook, r.stderr)
+
+
+# --- Beyond the plan's three cases: everything else that could make a hook
+# --- misbehave in a repository that has nothing to do with the kit.
+
+def _raw(hook, stdin, *, env, cwd=None):
+    return subprocess.run(["/usr/bin/bash", str(HOOKS / hook)], input=stdin,
+                          capture_output=True, text=True, env=env, cwd=cwd)
+
+
+def _env(project_dir=None, plugin_root=True, path="/usr/bin:/bin"):
+    env = {"PATH": path}
+    if plugin_root:
+        env["CLAUDE_PLUGIN_ROOT"] = str(HOOKS.parent)
+    if project_dir is not None:
+        env["CLAUDE_PROJECT_DIR"] = str(project_dir)
+    return env
+
+
+def _assert_silent_ok(r, hook):
+    assert r.returncode == 0, (hook, r.stdout, r.stderr)
+    assert r.stdout == "" and r.stderr == "", (hook, r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_jq_is_not_installed(hook, bare_project, tmp_path):
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    r = _raw(hook, json.dumps(bash_payload("git add -A", bare_project)),
+             env=_env(bare_project, path=str(empty)))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("content", ["", "[]", '"x"', "null", "false", "42"])
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_the_lock_is_not_a_json_object(hook, content, bare_project):
+    (bare_project / ".claude").mkdir()
+    (bare_project / ".claude/kit.lock.json").write_text(content)
+    r = _raw(hook, json.dumps(bash_payload("git add -A", bare_project)),
+             env=_env(bare_project))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_the_lock_is_a_directory(hook, bare_project):
+    (bare_project / ".claude/kit.lock.json").mkdir(parents=True)
+    r = _raw(hook, json.dumps(bash_payload("x", bare_project)), env=_env(bare_project))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_project_dir_does_not_exist(hook, tmp_path):
+    r = _raw(hook, json.dumps(bash_payload("x", tmp_path)),
+             env=_env(tmp_path / "nope"))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_no_project_dir_and_no_cwd(hook, bare_project):
+    r = _raw(hook, json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}}),
+             env=_env(None), cwd=bare_project)
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_the_payload_has_no_tool_input(hook, bare_project):
+    r = _raw(hook, json.dumps({"tool_name": "Bash", "cwd": str(bare_project)}),
+             env=_env(bare_project))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("stdin", ["", "   \n", "not json", "[]", '"x"', "null", "7"])
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_on_malformed_stdin(hook, stdin, bare_project):
+    r = _raw(hook, stdin, env=_env(bare_project))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_when_plugin_root_is_unset(hook, bare_project):
+    """`set -u` must not trip on an unset CLAUDE_PLUGIN_ROOT before the lock check."""
+    r = _raw(hook, json.dumps(bash_payload("x", bare_project)),
+             env=_env(bare_project, plugin_root=False))
+    _assert_silent_ok(r, hook)
+
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_inert_with_project_dir_unset_and_cwd_in_payload(hook, bare_project):
+    r = _raw(hook, json.dumps(bash_payload("x", bare_project)), env=_env(None))
+    _assert_silent_ok(r, hook)
+
+
+# --- The preamble is real and shared.
+
+@pytest.mark.parametrize("hook", ALL_HOOKS)
+def test_every_hook_sources_the_shared_preamble_and_calls_kit_init(hook):
+    text = (HOOKS / hook).read_text()
+    assert "lib/kitlock.sh" in text, hook
+    assert "\nkit_init\n" in text, hook
+
+
+@pytest.mark.parametrize("via", ["env", "cwd"])
+def test_kit_init_finds_a_valid_lock(via, bare_project):
+    """The positive path: a valid lock must survive kit_init and be exported."""
+    (bare_project / ".claude").mkdir()
+    (bare_project / ".claude/kit.lock.json").write_text('{"a": {"b": "c"}}')
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"},
+                          "cwd": str(bare_project)})
+    env = _env(bare_project if via == "env" else None)
+    r = subprocess.run(
+        ["/usr/bin/bash", "-c",
+         f'source "{HOOKS}/lib/kitlock.sh"; kit_init; echo "$KIT_LOCK"; kit_q .a.b; kit_in .tool_name'],
+        input=payload, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split("\n")[:3] == [f"{bare_project}/.claude/kit.lock.json", "c", "Bash"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -3161,11 +3296,14 @@ Expected: FAIL — `bash: .../hooks/pre-bash-guard.sh: No such file or directory
 
 ```bash
 # plugins/agentic-kit/hooks/lib/kitlock.sh
+# shellcheck shell=bash
 # Shared hook preamble. Sourced, not executed.
 #
 # Contract: every hook in this plugin is INERT outside a kit project. A missing or
 # unparseable .claude/kit.lock.json is the normal case — the plugin is installed
 # machine-wide and most repositories are not kit projects.
+#
+# Every guard below ends in `exit 0`, silently: nothing on stdout or stderr.
 #
 # Exports: KIT_LOCK (path), KIT_INPUT (raw stdin), and kit_q() to query the lock.
 
@@ -3174,19 +3312,19 @@ kit_bail_ok() { exit 0; }
 kit_init() {
   command -v jq >/dev/null 2>&1 || kit_bail_ok
 
-  KIT_INPUT=$(cat)
+  KIT_INPUT=$(cat 2>/dev/null) || kit_bail_ok
   [ -n "$KIT_INPUT" ] || kit_bail_ok
-  printf '%s' "$KIT_INPUT" | jq -e . >/dev/null 2>&1 || kit_bail_ok
+  printf '%s' "$KIT_INPUT" | jq -e 'type == "object"' >/dev/null 2>&1 || kit_bail_ok
 
   local root="${CLAUDE_PROJECT_DIR:-}"
   if [ -z "$root" ]; then
-    root=$(printf '%s' "$KIT_INPUT" | jq -r '.cwd // empty')
+    root=$(printf '%s' "$KIT_INPUT" | jq -r '.cwd // empty | strings' 2>/dev/null)
   fi
-  [ -n "$root" ] && [ -d "$root" ] || kit_bail_ok
+  if [ -z "$root" ] || [ ! -d "$root" ]; then kit_bail_ok; fi
 
   KIT_LOCK="$root/.claude/kit.lock.json"
   [ -f "$KIT_LOCK" ] || kit_bail_ok
-  jq -e . "$KIT_LOCK" >/dev/null 2>&1 || kit_bail_ok
+  jq -e 'type == "object"' "$KIT_LOCK" >/dev/null 2>&1 || kit_bail_ok
 
   export KIT_INPUT KIT_LOCK
 }
@@ -3195,7 +3333,7 @@ kit_init() {
 kit_q() { jq -r "$1 // empty" "$KIT_LOCK" 2>/dev/null; }
 
 # kit_in <jq-filter> — query the hook payload
-kit_in() { printf '%s' "$KIT_INPUT" | jq -r "$1 // empty"; }
+kit_in() { printf '%s' "$KIT_INPUT" | jq -r "$1 // empty" 2>/dev/null; }
 
 # kit_deny <reason> — block the tool call, per the Claude Code hook contract
 kit_deny() {
@@ -3211,7 +3349,12 @@ Create all four hooks as inert stubs so the parametrized test can pass now; Task
 # plugins/agentic-kit/hooks/pre-bash-guard.sh
 #!/usr/bin/env bash
 set -uo pipefail
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+# Pure parameter expansion, no `dirname`: PATH may hold nothing at all.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 exit 0
 ```
@@ -3220,7 +3363,12 @@ exit 0
 # plugins/agentic-kit/hooks/pre-file-guard.sh
 #!/usr/bin/env bash
 set -uo pipefail
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+# Pure parameter expansion, no `dirname`: PATH may hold nothing at all.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 exit 0
 ```
@@ -3229,7 +3377,12 @@ exit 0
 # plugins/agentic-kit/hooks/post-edit-format.sh
 #!/usr/bin/env bash
 set -uo pipefail
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+# Pure parameter expansion, no `dirname`: PATH may hold nothing at all.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 exit 0
 ```
@@ -3238,7 +3391,12 @@ exit 0
 # plugins/agentic-kit/hooks/subagent-stop-check.sh
 #!/usr/bin/env bash
 set -uo pipefail
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+# Pure parameter expansion, no `dirname`: PATH may hold nothing at all.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 exit 0
 ```
@@ -3261,7 +3419,33 @@ Expected: PASS, 12 passed
 
 ```bash
 git add plugins/agentic-kit/hooks plugins/agentic-kit/kitgen/tests/test_hooks_inert.py plugins/agentic-kit/kitgen/tests/hooks_conftest.py plugins/agentic-kit/kitgen/tests/__init__.py
-git commit -m "feat(hooks): shared kitlock preamble, inert outside kit projects"
+"""Helpers for driving the Bash hooks the way Claude Code does."""
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+HOOKS = Path(__file__).resolve().parents[2] / "hooks"
+
+
+def run_hook(name: str, payload: dict, project_dir: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", str(HOOKS / name)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "CLAUDE_PLUGIN_ROOT": str(HOOKS.parent),
+             "CLAUDE_PROJECT_DIR": str(project_dir)},
+    )
+
+
+def bash_payload(command: str, cwd: Path) -> dict:
+    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
+
+
+def file_payload(tool: str, file_path: str, cwd: Path) -> dict:
+    return {"tool_name": tool, "tool_input": {"file_path": file_path}, "cwd": str(cwd)}
 ```
 
 ---
