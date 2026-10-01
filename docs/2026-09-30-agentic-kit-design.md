@@ -291,7 +291,7 @@ the official marketplace plugins.
 | Skill | Behaviour |
 |---|---|
 | `next-task` | Read `spine.plan`, take the next unblocked task, read its block in `spine.strategy` §11, dispatch the owning role with the task block and role card, validate the returned handoff against acceptance, run the named tests if evidence is missing, update the plan. Stop and report after a second failed attempt. |
-| `gate-check <id>` | Write `docs/gates/<id>/{functional,tests,floors,operational,summary}.md`. Floors dimension is produced by the veto role and can BLOCK. Verdict PASS / CONDITIONAL / BLOCK; conditions carry an owner and a deadline task ID. |
+| `gate-check <id>` | Write `docs/gates/<id>/summary.md` (Functional, Tests, Operational, Milestone additions, Verdict, and the Floors verdict by reference) and `docs/gates/<id>/floors.md`, authored by the veto role itself. Verdict PASS / CONDITIONAL / BLOCK; conditions carry an owner and a deadline task ID. **Two files, decided 2026-10-02 (decision 4):** the five dimensions are the discipline and are unchanged, but four of them arrive as handoff notes the Orchestrator must paste as evidence anyway, so a five-file bundle was ceremony — `summary.md` restated the other four. Floors keeps its own file because it can BLOCK, and a verdict the veto role writes itself cannot be softened in synthesis. |
 | `handoff` | Emit the structured note. Role-specific lines come from `roles[].handoff_extra`. Evidence over prose: the test command and its last line, never a claim without a run. |
 | `new-adr <title>` | Scaffold `docs/adr/NNNN-<slug>.md`, append to `spine.decisions` index. |
 | `risk` | Add or update a row in `spine.risks`. |
@@ -779,10 +779,11 @@ become permission rules: a floor is an invariant ("the safety tier is append-onl
 deliberately owned by `architect` in every generated roster, which is why `/new-adr` is an
 Orchestrator-or-`architect` skill — no other role can file one, including the veto role whose own §6
 requires an ADR to weaken a floor. `docs/gates/**` must be left **unowned**: `/gate-check` has the veto
-role write `floors.md` and `qa` write `tests.md` into the same bundle, and the per-role guard (§6.4)
+role write `floors.md` there while the Orchestrator writes `summary.md`, and the per-role guard (§6.4)
 permits that only because an unowned path crosses nobody's boundary. A roster that claimed
-`docs/gates/**` for one role would block every other role from contributing its own dimension, and the
-gate could not be assembled at all. Neither path is a `spine` key, so neither is configurable — the
+`docs/gates/**` for one role would block the veto role from authoring its own verdict — the one thing
+decision 4 kept a separate file for — and `critical` is not the answer either: the veto role must write
+there, but so must the Orchestrator. Neither path is a `spine` key, so neither is configurable — the
 skills and the templates both hardcode them, and they agree.
 
 **Test paths need deliberate ownership.** The per-role guard (§6.4) blocks a role from writing a path

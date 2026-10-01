@@ -62,3 +62,23 @@ def test_handoff_scopes_the_contracts_rule_to_another_role():
            "another role** owns `spine.contracts`" in text
     assert "If you do\nnot own `spine.contracts`" not in text
     assert "no role** owns" in text, "the unowned case must be spelled out"
+
+
+def test_gate_check_writes_two_files_and_does_not_author_the_floors_verdict():
+    """Decision 4: the five dimensions are the discipline and stay; the five-file
+    bundle was ceremony, and `summary.md` restated the other four. Floors keeps its
+    own file because it can BLOCK — a verdict the veto role writes itself cannot be
+    softened in synthesis, so the skill must not let the Orchestrator edit it."""
+    raw = (SKILLS / "gate-check/SKILL.md").read_text()
+    # Collapsed whitespace: these are prose assertions and the file is hard-wrapped,
+    # so a phrase can legitimately straddle a line break.
+    text = " ".join(raw.split())
+    assert "Two files, not five" in text
+    assert "floors.md" in text and "summary.md" in text
+    for gone in ("functional.md", "tests.md", "operational.md"):
+        assert gone not in text, f"{gone} should no longer be a separate file"
+    for heading in ("## Functional", "## Tests", "## Operational",
+                    "## Milestone additions", "## Verdict", "## Floors"):
+        assert heading in raw, heading
+    assert "you do not edit that file" in text
+    assert "not yours to summarise" in text
