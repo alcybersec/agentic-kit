@@ -182,13 +182,21 @@ class KitConfig:
 
         for role in self.roles:
             for glob in role.owns:
-                if glob.startswith("./") or "//" in glob or "../" in glob:
+                bad = None
+                if glob.startswith("/"):
+                    bad = "it is absolute"
+                elif "\\" in glob:
+                    bad = "it uses a backslash separator"
+                elif any(seg in ("", ".", "..") for seg in glob.split("/")):
+                    bad = "it has an empty, '.' or '..' segment"
+                if bad:
                     raise ConfigError(
                         f"role {role.name!r} owns glob {glob!r} is not normalised: "
-                        f"write it relative to the repository root with no './', "
-                        f"'//' or '../'. Overlap is decided on literal path "
-                        f"prefixes, so a non-normalised glob would not be "
-                        f"detected as overlapping an equivalent one.")
+                        f"{bad}. Write it relative to the repository root using "
+                        f"forward slashes, with no leading '/', no '.' or '..' "
+                        f"segment and no empty segment. Overlap is decided on "
+                        f"literal path prefixes, so a non-normalised glob would "
+                        f"not be detected as overlapping an equivalent one.")
 
         names = [r.name for r in self.roles]
         dupes = {n for n in names if names.count(n) > 1}

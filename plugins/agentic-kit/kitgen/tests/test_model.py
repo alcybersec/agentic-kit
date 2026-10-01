@@ -142,14 +142,32 @@ def test_scalar_where_a_list_belongs_is_a_config_error():
         KitConfig.from_dict({**MINIMAL, "floors": "one floor"})
 
 
-def test_non_normalised_owns_glob_is_rejected():
-    for glob in ("./src/**", "src//core/**", "src/../lib/**"):
-        bad = {**MINIMAL, "roles": [
-            {**MINIMAL["roles"][0], "owns": [glob]},
-            MINIMAL["roles"][1],
-        ]}
-        with pytest.raises(ConfigError, match="not normalised"):
-            KitConfig.from_dict(bad)
+@pytest.mark.parametrize("glob", [
+    "./src/**", "src//core/**", "src/../lib/**",
+    "/src/**", ".", "..", "src/./core/**", "src\\core/**",
+])
+def test_non_normalised_owns_glob_is_rejected(glob):
+    bad = {**MINIMAL, "roles": [
+        {**MINIMAL["roles"][0], "owns": [glob]},
+        MINIMAL["roles"][1],
+    ]}
+    with pytest.raises(ConfigError, match="not normalised"):
+        KitConfig.from_dict(bad)
+
+
+@pytest.mark.parametrize("glob", [
+    "src/**", "docs/adr/**", "compose.yaml", ".gitlab-ci.yml",
+    ".github/workflows/**", "src/ledger/api/**", "packages/protocol/**",
+    "tests/**", "migrations/**",
+])
+def test_normalised_owns_globs_are_accepted(glob):
+    """Every glob form the three Task 3 fixtures use must survive the check.
+    A leading dot in a segment name is not a '.' segment."""
+    ok = {**MINIMAL, "roles": [
+        {**MINIMAL["roles"][0], "owns": [glob]},
+        {**MINIMAL["roles"][1], "owns": ["zzz_unrelated/**"]},
+    ]}
+    assert KitConfig.from_dict(ok).roles[0].owns == [glob]
 
 
 def test_nested_profile_structures_are_not_aliased():
