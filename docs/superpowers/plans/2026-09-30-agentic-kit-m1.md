@@ -3452,6 +3452,7 @@ risk, because task notes and gate bundles cite them.
 Add: ID, the risk as a falsifiable statement, likelihood, impact, mitigation, owner, status.
 
 Rules:
+
 - A risk closes on **evidence**, not on time passing. Cite what closed it.
 - If the risk has already fired, say how many times and when. A recurrence count is the finding.
 - If an existing row covers it, update that row instead of adding a near-duplicate.
