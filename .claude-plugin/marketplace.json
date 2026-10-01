@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentic-kit",
+  "description": "Orchestrator-model Claude Code kit: role agents with path ownership, gates, risk register, handoff protocol.",
+  "owner": { "name": "Alex" },
+  "plugins": [
+    {
+      "name": "agentic-kit",
+      "description": "Drop-in agentic development kit: universal process skills, guard hooks, and a renderer that generates a project's orchestrator kit.",
+      "category": "workflow",
+      "source": "./plugins/agentic-kit"
+    }
+  ]
+}
