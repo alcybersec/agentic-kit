@@ -11,11 +11,16 @@ FIXTURES = ["greenfield_prd", "python_monolith", "services_layout"]
 # settings.json, Task 7 the docs spine. Keeping it exact at every step means the
 # suite is green at every task boundary instead of red until Task 7.
 def expected_paths(cfg):
-    return {
+    paths = {
         "CLAUDE.md",
         ".claude/kit.yaml",
         ".claude/kit.lock.json",
+        ".claude/agents/orchestrator.md",
     }
+    for r in cfg.roles:
+        paths.add(f".claude/agents/{r.name}.md")
+        paths.add(f".claude/agent-memory/{r.name}/MEMORY.md")
+    return paths
 
 
 def test_manifest_has_exactly_the_expected_paths(load_fixture):

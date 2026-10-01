@@ -25,6 +25,7 @@ TEMPLATES = Path(__file__).parent / "templates"
 #   Task 7 -> plan/strategy/design/decisions/risk-register/CONTRACTS/adr-0001
 SINGLETONS = {
     "CLAUDE.md.j2": "CLAUDE.md",
+    "orchestrator.md.j2": ".claude/agents/orchestrator.md",
 }
 
 
@@ -54,6 +55,10 @@ def render(cfg: KitConfig) -> dict[str, str]:
     out[".claude/kit.yaml"] = yaml.safe_dump(lock, sort_keys=False, width=100)
     out[".claude/kit.lock.json"] = json.dumps(lock, indent=2, sort_keys=True) + "\n"
 
-    # Task 5 adds the per-role loop here (role.md.j2 and MEMORY.md.j2).
+    role_card = env.get_template("role.md.j2")
+    memory = env.get_template("MEMORY.md.j2")
+    for r in cfg.roles:
+        out[f".claude/agents/{r.name}.md"] = role_card.render(role=r, **ctx)
+        out[f".claude/agent-memory/{r.name}/MEMORY.md"] = memory.render(role=r, **ctx)
 
     return out
