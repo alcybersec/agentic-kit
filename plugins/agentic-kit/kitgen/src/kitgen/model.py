@@ -175,6 +175,13 @@ class KitConfig:
                 if key not in present:
                     raise ConfigError(f"{section} is missing {key!r}")
 
+        for key, value in self.toolchain.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(
+                    f"toolchain.{key} must be a non-empty command string; an empty "
+                    f"value renders the permission rule 'Bash(:*)', whose meaning "
+                    f"depends on how the host parses an empty prefix")
+
         if not isinstance(self.observability, bool):
             raise ConfigError(
                 f"observability must be a boolean, got "

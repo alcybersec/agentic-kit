@@ -175,3 +175,10 @@ def test_nested_profile_structures_are_not_aliased():
     cfg = KitConfig.from_dict(profile)
     assert cfg.spine["inherited"] is not profile["spine"]["inherited"]
     assert cfg.milestones["outline"] is not profile["milestones"]["outline"]
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_toolchain_value_is_rejected(value):
+    bad = {**MINIMAL, "toolchain": {**MINIMAL["toolchain"], "format": value}}
+    with pytest.raises(ConfigError, match="toolchain.format"):
+        KitConfig.from_dict(bad)

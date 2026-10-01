@@ -29,9 +29,12 @@
 {% for s in cfg.secrets %}
       "Read({{ s }})",
       "Edit({{ s }})",
+      "Write({{ s }})",
 {% endfor %}
       "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
       "Edit(./.claude/kit.lock.json)",
+      "Write(./.claude/kit.lock.json)",
       "Bash(rm -rf:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
