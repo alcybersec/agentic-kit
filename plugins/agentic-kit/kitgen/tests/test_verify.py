@@ -309,3 +309,180 @@ def test_contracts_unowned_is_the_intended_state(load_fixture):
         contracts = cfg.spine["contracts"]
         assert not any(contracts in r.owns for r in cfg.roles), name
         assert verify(render(cfg), cfg) == [], name
+
+
+# --- fix 2.1: every structural failure must be LOUD, and say which one --------
+#
+# verify()'s whole job is to refuse before anything is written, so a check that
+# passes vacuously is worse than no check. Thirteen of its lines had never been
+# executed by any test, all of them the "I could not even find this" branches:
+# a missing document, a garbled one, a renamed heading. Each case below damages
+# the manifest in one specific way and asserts the EXACT message, because a
+# `len(problems) > 0` assertion would be satisfied by any complaint at all --
+# including one about something else entirely.
+
+def _man(load_fixture, fixture="services_layout"):
+    cfg = load_fixture(fixture)
+    return render(cfg), cfg
+
+
+def _drop_heading(text, heading):
+    """Rename a heading in place, keeping the body: the section becomes
+    unfindable without the file shrinking, which is what a template edit does."""
+    return text.replace(heading, heading.replace("## ", "## x"), 1)
+
+
+LOUD = [
+    # (label, damage(manifest, cfg), expected substring)
+    ("CLAUDE.md deleted",
+     lambda m, c: m.pop("CLAUDE.md"),
+     "CLAUDE.md: agent table (header '| Agent | Owns |') not found"),
+    ("CLAUDE.md agent table heading renamed",
+     lambda m, c: m.__setitem__("CLAUDE.md",
+                                m["CLAUDE.md"].replace("| Agent | Owns |", "| Role | Paths |")),
+     "CLAUDE.md: agent table (header '| Agent | Owns |') not found"),
+    ("kit.yaml replaced with a scalar",
+     lambda m, c: m.__setitem__(".claude/kit.yaml", "just a string\n"),
+     ".claude/kit.yaml is not usable"),
+    ("kit.yaml is not parseable YAML",
+     lambda m, c: m.__setitem__(".claude/kit.yaml", "roles: [unclosed\n"),
+     ".claude/kit.yaml is not usable"),
+    ("kit.yaml lost its roles key",
+     lambda m, c: m.__setitem__(".claude/kit.yaml", "project: {name: x}\n"),
+     ".claude/kit.yaml is not usable"),
+    ("settings.json is not JSON",
+     lambda m, c: m.__setitem__(".claude/settings.json", "{not json"),
+     ".claude/settings.json is not usable"),
+    ("settings.json lost its permissions key",
+     lambda m, c: m.__setitem__(".claude/settings.json", '{"env": {}}'),
+     ".claude/settings.json is not usable"),
+    ("kit.lock.json is not JSON",
+     lambda m, c: m.__setitem__(".claude/kit.lock.json", "{not json"),
+     ".claude/kit.lock.json is not usable"),
+    ("kit.lock.json no longer matches the config",
+     lambda m, c: m.__setitem__(".claude/kit.lock.json", '{"roles": []}'),
+     ".claude/kit.lock.json does not match the config it came from"),
+    ("strategy.md deleted",
+     lambda m, c: m.pop(c.spine["strategy"]),
+     "§2 ownership map not found"),
+    ("strategy §2 heading renamed",
+     lambda m, c: m.__setitem__(c.spine["strategy"],
+                                _drop_heading(m[c.spine["strategy"]], "## 2.")),
+     "§2 ownership map not found"),
+    ("strategy §11 heading renamed",
+     lambda m, c: m.__setitem__(c.spine["strategy"],
+                                _drop_heading(m[c.spine["strategy"]], "## 11.")),
+     "§11 task graph not found"),
+    ("strategy §11 task rows removed",
+     lambda m, c: m.__setitem__(
+         c.spine["strategy"],
+         "\n".join(l for l in m[c.spine["strategy"]].splitlines()
+                   if not l.startswith("| M0-S1-")) + "\n"),
+     "§11: no M0 task rows found"),
+    ("a role card is missing",
+     lambda m, c: m.pop(f".claude/agents/{c.roles[0].name}.md"),
+     "no .claude/agents/"),
+    ("a role's memory file is missing",
+     lambda m, c: m.pop(f".claude/agent-memory/{c.roles[0].name}/MEMORY.md"),
+     "/MEMORY.md in the manifest"),
+    ("a rendered spine document is missing",
+     lambda m, c: m.pop(c.spine["design"]),
+     "is neither rendered nor present on disk"),
+    ("a load_order document is missing",
+     lambda m, c: m.pop(c.load_order[0]["path"]),
+     "is neither rendered nor"),
+]
+
+
+@pytest.mark.parametrize("label,damage,expected",
+                         LOUD, ids=[c[0] for c in LOUD])
+def test_a_damaged_manifest_fails_with_the_right_message(load_fixture, label,
+                                                         damage, expected):
+    man, cfg = _man(load_fixture)
+    assert verify(man, cfg) == [], "the fixture must start clean"
+    damage(man, cfg)
+    problems = verify(man, cfg)
+    assert any(expected in p for p in problems), (label, expected, problems)
+
+
+def test_an_extra_agent_card_with_no_role_is_reported(load_fixture):
+    man, cfg = _man(load_fixture)
+    man[".claude/agents/ghost.md"] = "# ghost\n"
+    assert any("agent card 'ghost' has no matching role" in p
+               for p in verify(man, cfg))
+
+
+def test_an_extra_row_in_the_claude_md_table_is_reported(load_fixture):
+    man, cfg = _man(load_fixture)
+    first = cfg.roles[0].name
+    man["CLAUDE.md"] = man["CLAUDE.md"].replace(
+        f"| `{first}` |", f"| `phantom` | `x/**` | - |\n| `{first}` |", 1)
+    assert any("lists 'phantom', which is not in roles[]" in p
+               for p in verify(man, cfg))
+
+
+def test_a_handoff_extra_missing_from_the_card_is_reported(load_fixture):
+    man, cfg = _man(load_fixture)
+    role = next(r for r in cfg.roles if r.handoff_extra)
+    card = f".claude/agents/{role.name}.md"
+    man[card] = man[card].replace(role.handoff_extra[0], "REMOVED:")
+    assert any(f"handoff line {role.handoff_extra[0]!r} missing" in p
+               for p in verify(man, cfg))
+
+
+def test_an_extra_role_row_in_strategy_2_is_reported(load_fixture):
+    man, cfg = _man(load_fixture)
+    sp = cfg.spine["strategy"]
+    first = cfg.roles[0].name
+    man[sp] = man[sp].replace(f"| `{first}` |",
+                              f"| `phantom` | `x/**` | - |\n| `{first}` |", 1)
+    assert any("§2 lists role 'phantom', which is not in roles[]" in p
+               for p in verify(man, cfg))
+
+
+def test_an_inherited_doc_in_load_order_is_not_demanded_without_a_root(load_variant):
+    """A brownfield profile may put the PRD in `load_order`. It is never rendered,
+    so with no `project_root` there is no way to look for it — and demanding it
+    would make every clean render verify dirty."""
+    cfg = load_variant(
+        "services_layout",
+        load_order=[{"path": "docs/plan/README.md", "mode": "full"},
+                    {"path": "docs/PRD.md", "mode": "full"}])
+    assert "docs/PRD.md" in cfg.spine["inherited"]
+    assert verify(render(cfg), cfg) == []
+
+
+def test_the_same_inherited_doc_is_demanded_when_a_root_is_given(load_variant, tmp_path):
+    """With a root, absence is a fact rather than an unknown."""
+    cfg = load_variant(
+        "services_layout",
+        load_order=[{"path": "docs/plan/README.md", "mode": "full"},
+                    {"path": "docs/PRD.md", "mode": "full"}])
+    problems = verify(render(cfg), cfg, project_root=tmp_path)
+    assert any("docs/PRD.md" in p for p in problems), problems
+
+
+def test_a_table_row_without_a_backticked_name_is_not_read_as_a_role(load_fixture):
+    """The row parser takes the backticked name from the first cell. A row that has
+    none is not a role row, and must not be silently accepted as one — otherwise a
+    reformatted table would let a missing role through."""
+    man, cfg = _man(load_fixture)
+    first = cfg.roles[0].name
+    man["CLAUDE.md"] = man["CLAUDE.md"].replace(f"| `{first}` |", f"| {first} |", 1)
+    assert any(f"role {first!r}: absent from the CLAUDE.md agent table" in p
+               for p in verify(man, cfg))
+
+
+def test_the_agent_table_is_read_when_it_is_the_last_thing_in_the_file(load_fixture):
+    """The row loop normally stops at the first line that is not a table row. When
+    the table runs to the end of the file it has to stop by exhausting the lines
+    instead — the case a truncated template produces, and the one branch of this
+    loop no other test reached. The roles must still be read, so that a truncated
+    CLAUDE.md is reported for what it is missing and not for a role it does list."""
+    man, cfg = _man(load_fixture)
+    lines = man["CLAUDE.md"].splitlines()
+    last_row = max(i for i, l in enumerate(lines) if l.startswith("| `"))
+    man["CLAUDE.md"] = "\n".join(lines[:last_row + 1]) + "\n"
+    problems = verify(man, cfg)
+    assert not any("agent table" in p for p in problems), problems
+    assert not any("absent from the CLAUDE.md agent table" in p for p in problems), problems
