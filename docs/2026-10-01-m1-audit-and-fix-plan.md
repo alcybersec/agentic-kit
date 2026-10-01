@@ -189,6 +189,49 @@ remaining **[R]** rows in Part 3 as leads, not facts.
 | 2.3 | Profile-key matrix: delete each of the 16 required keys and mistype each of the 9 shape-checked sections. | 22 survivors |
 | 2.4 | Delete the 8 tests proved unable to fail; wire `scripts/check_plan_sync.py` into the suite (nothing runs it today, and a *new* template is silently unchecked). | — |
 
+### Phase 3 — spec corrections — **DONE except the three design decisions** (2026-10-02)
+
+`738b545`, `190e593`, `4efc956`. Suite 755 -> 807 + 3 skipped.
+
+Done: F1 (secrets reach two matchers; the `./` form is now enforced, and §6.2 records the half that
+cannot be fixed in the deny rules), F2 and F3 (in Phase 0/1), F4 (presence marker, §4.2 and §9.3),
+F6 (§4.4's signature was never implemented), F7 (the published attribution regex was far broader than
+the hook's), both overstatements (§7.1a, §6.3), the §6.4/§6.5 swap, the four unenforced MUSTs now
+marked **M2** with §7.2 carrying the consequence spelled out, §9.1's two bullets that described checks
+which do not and cannot exist, and the minors worth code: `MultiEdit` missing from the file-guard
+matcher, the `git add -A -- <path>` false positive, CLAUDE.md's agent table header naming a column it
+did not contain, CLAUDE.md listing six of nine skills, every generated file pointing at `/kit-upgrade`
+(M2) instead of a command that works, and `services_layout` shipping the `tests/**` anti-pattern §8.4
+warns about — which blocked four of its eight roles from writing any test.
+
+**Two defects found in this phase that no audit reported**, both from chasing the flaky test the
+earlier runs showed and I had wrongly written off as contention (`738b545`):
+
+1. `printf | grep -q` under `set -o pipefail` is a race — `grep -q` exits on the first match and the
+   writer's SIGPIPE becomes a failed pipeline. 18/1200 under concurrency. It made the handoff gate
+   **block a finished task** and the attribution check **let a line through**, from one idiom in two
+   directions.
+2. `export KIT_INPUT` disarmed every hook above ~128 KB. An exported variable goes into every child's
+   environment, Linux caps one such string at MAX_ARG_STRLEN, and past it `execve` fails with E2BIG —
+   so every `jq` died and each hook read an empty payload and exited 0. `kit_init` validated the
+   payload *before* exporting, so it passed its own check and poisoned everything after. A Bash
+   heredoc reaches 128 KB unremarkably; a verbose subagent's `last_assistant_message` reaches it
+   easily, so the gate failed open for exactly the agents that said the most.
+
+Both now have deterministic tests, and `test_shell_hygiene.py` makes each pattern findable by grep
+rather than by accident.
+
+**Deliberately not done — the three design decisions, which are the user's:**
+
+- **Spine size.** Six documents, or three.
+- **Role cap.** §8.4's derivation rule produced 12 roles on a real repository; `services_layout`
+  renders 8. The gate ceremony and the ownership map both scale with this.
+- **Gate ceremony.** Five dimensions and a five-file bundle, or a checklist.
+
+Also left: **E-A6** (ownership is directory-granular, so the veto role cannot own a single critical
+file inside another role's tree) and **E-A5** (the observability floor is unsatisfiable for most roles
+on a real repo). Both are design questions rather than defects, and both were on the list of five.
+
 ### Phase 3 — spec corrections (~25, controller does these)
 
 Three false factual claims (F1 secrets depth semantics differ between the hook and the deny rules;
