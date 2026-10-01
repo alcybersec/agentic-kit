@@ -283,7 +283,7 @@ the same worktree lesson is recorded twice in this user's notes.
 | `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/claude|anthropic|co-authored-by:.*claude/i` when `attribution.mention_assistant_in_commits` is false |
 | `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
 | `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file, and **never fails a tool call** |
-| `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message` (falling back to `agent_transcript_path`) |
+| `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message`, the subagent's own `agent_transcript_path`, or a `SubagentHandback` call's `input` — any one of the three satisfies it |
 
 Every one exits 0 when the lock is absent (§4.3).
 
@@ -410,6 +410,14 @@ handoff gate. Verified against the Claude Code binary, which constructs it with
   whenever the agent adds a closing remark after emitting it — "Done." after the note is entirely
   ordinary, and the gate would refuse a finished task. The subagent transcript is still read before the
   parent's, so the false negative above stays closed.
+- **A third source: the `SubagentHandback` call in the transcript** (added 2026-10-01, fix 1.5). That
+  tool is force-granted in auto mode on v2.1.271+, overriding `tools` and `disallowedTools`, and a
+  subagent handing back through it carries its report in the call's `input` — so the note is in neither
+  source above, and a task that was in fact finished gets blocked for not emitting one. The hook reads
+  every string leaf of that call's `input` rather than one named field: the field name is not something
+  it can pin, and an unexpected schema must not become a false block. **Only** `SubagentHandback` is
+  read this way; a note typed into a file by a `Write` call still does not count, because the
+  Orchestrator has not been handed it.
 
 **What this gate can promise, and what it cannot.** Because `stop_hook_active` makes the hook succeed on
 the retry, **it can only ever block once**: an agent that never produces a note is nudged a single time

@@ -282,3 +282,45 @@ def test_format_hook_passes_the_edited_file_as_the_only_argument(tmp_path):
                  file_payload("Edit", str(p / "src/a.py"), p), p)
     assert r.returncode == 0
     assert argv.read_text().split() == [str(p / "src/a.py")]
+
+
+# --- fix 1.5: the note may arrive inside a SubagentHandback call --------------
+
+def _handback(input_obj):
+    return {"message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "SubagentHandback", "input": input_obj}]}}
+
+
+@pytest.mark.parametrize("input_obj", [
+    {"report": NOTE},
+    {"summary": NOTE},                                  # field name not pinned
+    {"result": {"nested": {"deeper": NOTE}}},           # nor its depth
+    {"status": "done", "report": NOTE},
+])
+def test_a_handback_report_satisfies_the_stop_check(tmp_path, input_obj):
+    """SubagentHandback is force-granted in auto mode on v2.1.271+, overriding
+    `tools`/`disallowedTools`. A subagent that hands back through it puts its
+    report in the call's `input`, so the note is in neither source the hook read
+    before — and a task that was in fact finished got blocked for not emitting
+    one. Every string leaf is searched, because the field name is not something
+    this hook can pin and an unexpected schema must not become a false block."""
+    p = make_project(tmp_path)
+    assert stop(p, [_handback(input_obj)]).returncode == 0
+
+
+def test_a_handback_without_a_note_still_blocks(tmp_path):
+    p = make_project(tmp_path)
+    r = stop(p, [_handback({"report": "I finished the task, all good."})])
+    assert r.returncode == 2
+    assert "/handoff" in r.stderr
+
+
+def test_another_tools_input_does_not_satisfy_the_check(tmp_path):
+    """Only SubagentHandback is read. A note typed into a file by a Write call is
+    not the subagent's report: it is a file the Orchestrator has not been handed,
+    and the pre-1.5 comment said so explicitly."""
+    p = make_project(tmp_path)
+    r = stop(p, [{"message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "Write",
+         "input": {"file_path": "note.md", "content": NOTE}}]}}])
+    assert r.returncode == 2, r.stderr

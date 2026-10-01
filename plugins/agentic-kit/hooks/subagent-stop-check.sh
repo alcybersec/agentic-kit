@@ -47,9 +47,17 @@ else
   # The assistant's own text, one real line per line. JSONL entries are reduced to the
   # text blocks of assistant messages, so a note carried as an escaped-newline string is
   # un-escaped, and neither the dispatch prompt (user) nor a note typed into a file by a
-  # tool call (tool_use) counts. A line that is not JSON passes through as-is. Two entry
+  # tool call counts. A line that is not JSON passes through as-is. Two entry
   # shapes are handled: {role,content:str} (tested) and {message:{role,content:[{type:
   # text}]}} (assumed from Claude Code's format, UNVERIFIED against a live transcript).
+  #
+  # ONE tool_use block is read as well: SubagentHandback. It is force-granted in auto
+  # mode on v2.1.271+, overriding `tools`/`disallowedTools`, and a subagent that hands
+  # back through it puts its report in the call's `input` -- so the note is in neither
+  # source this hook otherwise reads, and a finished task would be blocked for not
+  # having emitted one. Every string leaf of `input` is taken rather than one named
+  # field, because the field name is not something this hook can pin: an unexpected
+  # schema must not turn into a false block.
   text=$(jq -R -r '
     . as $l | (try ($l | fromjson) catch null) as $o
     | if ($o | type) != "object" then $l
@@ -58,7 +66,12 @@ else
         | if $role != "assistant" then empty
           else ($o.content // $o.message.content // empty)
             | if type == "string" then .
-              elif type == "array" then .[] | select(type == "object" and .type == "text") | .text | strings
+              elif type == "array" then
+                .[] | select(type == "object")
+                | if .type == "text" then (.text | strings)
+                  elif (.type == "tool_use" and .name == "SubagentHandback")
+                    then (.input | .. | strings)
+                  else empty end
               else empty end
           end
       end' "$transcript" 2>/dev/null) || text=""
