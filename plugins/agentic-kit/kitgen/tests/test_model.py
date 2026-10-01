@@ -189,3 +189,12 @@ def test_default_tools_include_skill():
     and a subagent without the Skill tool cannot invoke a slash skill at all."""
     from kitgen.model import DEFAULT_TOOLS
     assert "Skill" in DEFAULT_TOOLS
+
+
+@pytest.mark.parametrize("outline", [[], None, "M0"])
+def test_empty_or_malformed_milestone_outline_is_rejected(outline):
+    import copy
+    d = copy.deepcopy(MINIMAL)
+    d["milestones"]["outline"] = outline
+    with pytest.raises(ConfigError, match="outline"):
+        KitConfig.from_dict(d)

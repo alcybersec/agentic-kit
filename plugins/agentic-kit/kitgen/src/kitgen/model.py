@@ -175,6 +175,13 @@ class KitConfig:
                 if key not in present:
                     raise ConfigError(f"{section} is missing {key!r}")
 
+        outline = self.milestones["outline"]
+        if not isinstance(outline, list) or not outline:
+            raise ConfigError(
+                "milestones.outline must be a non-empty list: strategy.md and "
+                "plan/README.md both index outline[0], so an empty one would "
+                "surface as a template UndefinedError instead of this message")
+
         for key, value in self.toolchain.items():
             if not isinstance(value, str) or not value.strip():
                 raise ConfigError(
