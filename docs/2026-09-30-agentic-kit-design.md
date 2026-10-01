@@ -314,6 +314,26 @@ before allow rules", and a hook cannot loosen them — "Claude Code evaluates de
 regardless of what a PreToolUse hook returns". So a deny rule is the strongest instrument here; there
 are simply fewer things it can express than its wording suggests.
 
+**Where `pre-bash-guard`'s matcher stops, concretely.** It segments the command on `; | & ( )` and
+newlines, peels wrapper prefixes and environment assignments, and tests each segment. That leaves a
+known, tested set of spellings it does not catch:
+
+| Spelling | Why |
+|---|---|
+| `bash -c "git add -A"`, `sh -c '…'` | the command is inside a quoted string, not a segment |
+| `xargs git add -A` | `xargs` builds its argv at run time |
+| `git add -A\` (trailing backslash) | the token is `-A\`, not `-A` |
+| `cat "$(echo .e)nv"` | the path is constructed at run time — unfixable in principle |
+| `git commit -F msg.txt` | the hook does not read file contents |
+
+And one false positive it accepts in exchange: `echo 'a; git add -A'` is blocked, because the segmenter
+is not quote-aware. Making it quote-aware means writing a shell parser in a `PreToolUse` hook, which
+costs more than it buys given this layer is not a containment boundary.
+
+These are pinned by `test_known_matcher_limits`, which asserts the *current* behaviour so that closing
+one becomes a deliberate decision rather than an accident, and so nobody reads the list above as
+coverage.
+
 The honest claim is that this layer stops **accidents and drift by a cooperative agent** — the
 staging sweep, the force push, the volume-deleting `down -v`, the wrong forge CLI, the credential
 read reached for without thinking. It is not a containment boundary and must never be described as
