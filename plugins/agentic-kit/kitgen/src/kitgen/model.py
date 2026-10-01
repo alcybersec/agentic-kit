@@ -284,8 +284,22 @@ class KitConfig:
                 for pa in a.owns:
                     for pb in b.owns:
                         if _overlaps(pa, pb):
+                            # Name the CAUSE, not just the pair. A glob whose first
+                            # segment is wild has no literal prefix and so overlaps
+                            # everything, which means the partner reported alongside
+                            # it is usually innocent -- and an author shown
+                            # "src/api/** overlaps *.py" reaches for the wrong one.
+                            why = ""
+                            if not _glob_prefix(pa) or not _glob_prefix(pb):
+                                wild = pa if not _glob_prefix(pa) else pb
+                                why = (f" -- {wild!r} begins with a wildcard segment, so "
+                                       f"it has no literal directory prefix and is "
+                                       f"treated as overlapping every other glob. The "
+                                       f"other pattern here may be fine: root it in a "
+                                       f"directory (§5.2)")
                             raise ConfigError(
-                                f"ownership overlap: {a.name}:{pa} and {b.name}:{pb}")
+                                f"ownership overlap: {a.name}:{pa} and "
+                                f"{b.name}:{pb}{why}")
 
         if not self.floors:
             raise ConfigError("floors must be non-empty; they scope the veto role")

@@ -28,8 +28,8 @@ roles:
   - {name: frontend, description: "Web client.", owns: ["services/ui/**"], handoff_extra: ["A11Y:"], veto: false}
   - {name: data, description: "Schema and migrations.", owns: ["services/db/**", "migrations/**"], handoff_extra: ["MIGRATION:", "PII COLUMNS:"], veto: false}
   - {name: devops, description: "Compose, CI, deploy.", owns: ["infra/**", ".gitlab-ci.yml"], handoff_extra: ["SERVICES:", "RUNBOOK:"], veto: false}
-  - {name: qa, description: "Integration and e2e.", owns: ["tests/**"], handoff_extra: ["COVERAGE DELTA:"], veto: false}
-  - {name: safety, description: "Floors and threat model.", owns: ["services/safety/**", "docs/security/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true}
+  - {name: qa, description: "Integration and e2e.", owns: ["tests/integration/**", "tests/e2e/**"], handoff_extra: ["COVERAGE DELTA:"], veto: false}
+  - {name: safety, description: "Floors and threat model.", owns: ["tests/safety/**", "services/safety/**", "docs/security/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true}
 floors:
   - "no plaintext credentials in the tree"
   - "the safety regression tier is append-only"

@@ -457,3 +457,28 @@ def test_more_than_one_veto_role_is_rejected_by_name():
     with pytest.raises(ConfigError, match=r"exactly one role must carry veto: true, "
                                           r"found \['architect', 'safety'\]"):
         KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+def test_an_overlap_caused_by_a_wild_first_segment_names_the_cause():
+    """A glob with no literal prefix overlaps everything, so the partner named
+    alongside it is usually innocent and the author reaches for the wrong one."""
+    bad = {**MINIMAL, "roles": [
+        {**MINIMAL["roles"][0], "owns": ["**/*.py"]},
+        {**MINIMAL["roles"][1], "owns": ["tests/safety/**"]},
+    ]}
+    with pytest.raises(ConfigError) as e:
+        KitConfig.from_dict(bad)
+    msg = str(e.value)
+    assert "'**/*.py' begins with a wildcard segment" in msg
+    assert "The other pattern here may be fine" in msg
+
+
+def test_an_ordinary_overlap_does_not_get_the_wildcard_explanation():
+    bad = {**MINIMAL, "roles": [
+        {**MINIMAL["roles"][0], "owns": ["src/a/**"]},
+        {**MINIMAL["roles"][1], "owns": ["src/a/b/**"]},
+    ]}
+    with pytest.raises(ConfigError) as e:
+        KitConfig.from_dict(bad)
+    assert "wildcard segment" not in str(e.value)
+    assert "ownership overlap: architect:src/a/** and safety:src/a/b/**" in str(e.value)
