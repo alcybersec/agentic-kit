@@ -616,6 +616,22 @@ observability: true
 Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_fixtures.py -v`
 Expected: PASS, 2 passed
 
+**Deliberate coverage gap, closed by variants rather than a fourth fixture.** These three profiles
+between them cover forge kinds `none`/`github`/`gitlab`, 4/6/8 roles, 0/1/2 inherited docs, 1/2/3
+floors, a mirror present and absent, both `attribution` settings, all three `load_order` modes, and
+outlines of length 1/2/3. Two template branches are **not** reachable from them:
+
+- `observability: false` — all three are `true`, so the `{% if cfg.observability %}` false branch
+  never renders.
+- `exclusive: false` **with a real forge** — the only `exclusive: false` profile is `greenfield_prd`,
+  which is also `kind: none`. That conflates "not exclusive" with "no forge", while §6.3 requires
+  `exclusive: false` on a real forge to block neither CLI.
+
+Adding a fourth fixture would mean touching the `FIXTURES` list in every later task, so instead Task 4
+adds a `load_variant` conftest fixture and Tasks 4 and 6 use it to render these two cases from an
+existing profile. Do **not** change these three fixtures to cover them — Tasks 4–8 and 16 assert
+against these exact role names, globs and counts.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -630,6 +646,7 @@ git commit -m "test(kitgen): three profile fixtures covering all forge kinds"
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/render.py`
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/CLAUDE.md.j2`
+- Modify: `plugins/agentic-kit/kitgen/tests/conftest.py` (add `load_variant`)
 - Test: `plugins/agentic-kit/kitgen/tests/test_render.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -725,6 +742,26 @@ def test_templates_actually_ship_in_the_installed_package():
     assert all(n.endswith(".j2") for n in shipped), shipped
 
 
+def test_observability_false_omits_the_observability_rule(load_variant):
+    """No fixture sets this false, so without a variant the branch never renders."""
+    on = render(load_variant("services_layout", observability=True))["CLAUDE.md"]
+    off = render(load_variant("services_layout", observability=False))["CLAUDE.md"]
+    assert "Observability with the feature" in on
+    assert "Observability with the feature" not in off
+
+
+def test_not_exclusive_with_a_real_forge_omits_the_prohibition(load_variant):
+    """exclusive: false only occurs on the kind: none fixture, so a real forge that
+    is merely non-exclusive is otherwise untested -- and §6.3 requires it to block
+    neither CLI."""
+    cfg = load_variant("services_layout",
+                       forge={**load_variant("services_layout").to_lock()["forge"],
+                              "exclusive": False})
+    body = render(cfg)["CLAUDE.md"]
+    assert "Forge:" in body and "`glab` for issues" in body
+    assert "Do not propose" not in body
+
+
 def test_no_template_placeholder_survives_rendering(load_fixture):
     for name in FIXTURES:
         for path, body in render(load_fixture(name)).items():
@@ -738,6 +775,24 @@ Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_render.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'kitgen.render'`
 
 - [ ] **Step 3: Write minimal implementation**
+
+Add to `tests/conftest.py`, beside the existing `load_fixture`:
+
+```python
+@pytest.fixture
+def load_variant():
+    """Load a fixture profile with top-level keys overridden, re-validating it.
+
+    Used for the two branches no fixture reaches (§Task 3 coverage gap). Goes back
+    through KitConfig.from_dict rather than dataclasses.replace, so a variant is a
+    genuinely valid profile and not one that skipped validation.
+    """
+    def _load(name: str, **overrides) -> KitConfig:
+        raw = yaml.safe_load((FIXTURE_DIR / name / "profile.yaml").read_text())
+        raw.update(overrides)
+        return KitConfig.from_dict(raw)
+    return _load
+```
 
 ```python
 # plugins/agentic-kit/kitgen/src/kitgen/render.py
@@ -1241,6 +1296,19 @@ def test_the_other_forge_cli_is_denied_when_exclusive(load_fixture):
 def test_no_forge_denies_neither_cli(load_fixture):
     deny = settings(load_fixture("greenfield_prd"))["permissions"]["deny"]
     assert "Bash(gh:*)" not in deny and "Bash(glab:*)" not in deny
+
+
+def test_a_real_but_non_exclusive_forge_denies_neither_cli(load_variant):
+    """greenfield_prd is both kind: none AND exclusive: false, so on its own it
+    cannot distinguish 'no forge' from 'not exclusive'. §6.3 requires a real forge
+    with exclusive: false to block neither CLI, and its own CLI to stay allowed."""
+    cfg = load_variant("services_layout",
+                       forge={**load_variant("services_layout").to_lock()["forge"],
+                              "exclusive": False})
+    perms = json.loads(render(cfg)[".claude/settings.json"])["permissions"]
+    assert "Bash(gh:*)" not in perms["deny"]
+    assert "Bash(glab:*)" not in perms["deny"]
+    assert "Bash(glab:*)" in perms["allow"]
 
 
 def test_toolchain_commands_are_allowed(load_fixture):
