@@ -654,6 +654,7 @@ git commit -m "test(kitgen): three profile fixtures covering all forge kinds"
 ```python
 # plugins/agentic-kit/kitgen/tests/test_render.py
 import json
+import re
 
 from kitgen.render import render
 
@@ -750,6 +751,45 @@ def test_not_exclusive_with_a_real_forge_omits_the_prohibition(load_variant):
     body = render(cfg)["CLAUDE.md"]
     assert "Forge:" in body and "`glab` for issues" in body
     assert "Do not propose" not in body
+
+
+def test_claude_md_has_every_section(load_fixture):
+    """The template was once committed truncated — a third of it missing, including
+    the whole dispatch loop — and every string-presence test still passed. Assert the
+    document's shape, not just that some phrases occur in it."""
+    always = [
+        "## Your default role: Orchestrator",
+        "## Session-start load order",
+        "## How you operate",
+        "## Commands",
+        "## Task dispatch loop",
+        "## What you never do",
+        "## Kit",
+    ]
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        body = render(cfg)["CLAUDE.md"]
+        for heading in always:
+            assert heading in body, (name, heading)
+        # the Forge section is conditional on there being a forge
+        assert ("## Forge:" in body) == (cfg.forge.kind != "none"), name
+        assert body.rstrip().endswith("after updating the plugin."), name
+
+
+def test_claude_md_is_well_formed_markdown(load_fixture):
+    """Two defects the string tests could not see: a table row hard-wrapped onto a
+    second line (which breaks the table), and a paragraph placed directly under a
+    numbered list (which Markdown absorbs into the last list item)."""
+    for name in FIXTURES:
+        lines = render(load_fixture(name))["CLAUDE.md"].splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("|"):
+                assert line.rstrip().endswith("|"), (name, i, line)
+        for i, line in enumerate(lines[:-1]):
+            if re.match(r"^\d+\. ", line):
+                nxt = lines[i + 1]
+                assert (nxt == "" or re.match(r"^\d+\. ", nxt)
+                        or nxt.startswith("   ")), (name, i, nxt)
 
 
 def test_no_template_placeholder_survives_rendering(load_fixture):
@@ -876,13 +916,15 @@ On the first response of any session, silently read in order:
 {{ loop.index }}. `{{ entry.path }}` — {% if entry.mode == 'full' %}read fully{% elif entry.mode == 'sections' %}§{{ entry.sections | join(', §') }} only{% else %}consult on demand; do not load whole unless the task needs it{% endif %}
 
 {% endfor %}
+
 {% if cfg.spine.inherited %}
 Authoritative pre-existing documentation, referenced and never rewritten:
+
 {% for p in cfg.spine.inherited %}
 - `{{ p }}`
 {% endfor %}
-{% endif %}
 
+{% endif %}
 Then ground the user in one short message: current milestone, next task ID, any open gate.
 
 ## How you operate
@@ -893,7 +935,7 @@ Then ground the user in one short message: current milestone, next task ID, any 
   for failing-test commits.
 - **Contract-first.** New interfaces start as a spec entry in `{{ cfg.spine.contracts }}` before
   implementation.
-- **Floors never regress.** {{ cfg.floors | join('; ') }}. `{{ veto.name }}` holds a veto on gates.
+- **Floors never regress:** {{ cfg.floors | join('; ') }}. `{{ veto.name }}` holds a veto on gates.
 - **Test tiers.** {% for tier, pct in cfg.test_tiers.items() %}{{ tier }} ≥ {{ pct }}%{{ ", " if not loop.last }}{% endfor %}.
 {% if cfg.observability %}
 - **Observability with the feature.** Every stage lands with counters, latency metrics and
@@ -919,15 +961,12 @@ Then ground the user in one short message: current milestone, next task ID, any 
 | CLI | `{{ forge.cli }}` |
 | CI | `{{ forge.ci }}` |
 {% if forge.mirror %}
-| mirror | `{{ forge.mirror }}` — **a push-mirror only.** Never open issues or PRs there, and never
-  treat its issue list as current state. Fetching is fine. |
+| mirror | `{{ forge.mirror }}` — **a push-mirror only.** Never open issues or PRs there, and never treat its issue list as current state. Fetching is fine. |
 {% endif %}
 
 - `git push` for code; `{{ forge.cli }}` for issues, reviews, CI.
 {% if forge.exclusive %}
-- **Only `{{ forge.cli }}`.** Do not propose {% if forge.kind == 'gitlab' %}GitHub Actions, pull
-  requests, or `gh`{% else %}GitLab CI, merge requests, or `glab`{% endif %} for this project. The
-  `pre-bash-guard` hook enforces this.
+- **Only `{{ forge.cli }}`.** Do not propose {% if forge.kind == 'gitlab' %}GitHub Actions, pull requests, or `gh`{% else %}GitLab CI, merge requests, or `glab`{% endif %} for this project. The `pre-bash-guard` hook enforces this.
 {% endif %}
 - An issue or review is **outward-facing**: it notifies and is hard to unsay. Confirm with the user
   before creating, editing or closing one, unless they asked for it in that turn. Reading needs no

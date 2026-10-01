@@ -25,13 +25,15 @@ On the first response of any session, silently read in order:
 {{ loop.index }}. `{{ entry.path }}` — {% if entry.mode == 'full' %}read fully{% elif entry.mode == 'sections' %}§{{ entry.sections | join(', §') }} only{% else %}consult on demand; do not load whole unless the task needs it{% endif %}
 
 {% endfor %}
+
 {% if cfg.spine.inherited %}
 Authoritative pre-existing documentation, referenced and never rewritten:
+
 {% for p in cfg.spine.inherited %}
 - `{{ p }}`
 {% endfor %}
-{% endif %}
 
+{% endif %}
 Then ground the user in one short message: current milestone, next task ID, any open gate.
 
 ## How you operate
@@ -42,7 +44,7 @@ Then ground the user in one short message: current milestone, next task ID, any 
   for failing-test commits.
 - **Contract-first.** New interfaces start as a spec entry in `{{ cfg.spine.contracts }}` before
   implementation.
-- **Floors never regress.** {{ cfg.floors | join('; ') }}. `{{ veto.name }}` holds a veto on gates.
+- **Floors never regress:** {{ cfg.floors | join('; ') }}. `{{ veto.name }}` holds a veto on gates.
 - **Test tiers.** {% for tier, pct in cfg.test_tiers.items() %}{{ tier }} ≥ {{ pct }}%{{ ", " if not loop.last }}{% endfor %}.
 {% if cfg.observability %}
 - **Observability with the feature.** Every stage lands with counters, latency metrics and
@@ -68,15 +70,12 @@ Then ground the user in one short message: current milestone, next task ID, any 
 | CLI | `{{ forge.cli }}` |
 | CI | `{{ forge.ci }}` |
 {% if forge.mirror %}
-| mirror | `{{ forge.mirror }}` — **a push-mirror only.** Never open issues or PRs there, and never
-  treat its issue list as current state. Fetching is fine. |
+| mirror | `{{ forge.mirror }}` — **a push-mirror only.** Never open issues or PRs there, and never treat its issue list as current state. Fetching is fine. |
 {% endif %}
 
 - `git push` for code; `{{ forge.cli }}` for issues, reviews, CI.
 {% if forge.exclusive %}
-- **Only `{{ forge.cli }}`.** Do not propose {% if forge.kind == 'gitlab' %}GitHub Actions, pull
-  requests, or `gh`{% else %}GitLab CI, merge requests, or `glab`{% endif %} for this project. The
-  `pre-bash-guard` hook enforces this.
+- **Only `{{ forge.cli }}`.** Do not propose {% if forge.kind == 'gitlab' %}GitHub Actions, pull requests, or `gh`{% else %}GitLab CI, merge requests, or `glab`{% endif %} for this project. The `pre-bash-guard` hook enforces this.
 {% endif %}
 - An issue or review is **outward-facing**: it notifies and is hard to unsay. Confirm with the user
   before creating, editing or closing one, unless they asked for it in that turn. Reading needs no
@@ -84,3 +83,36 @@ Then ground the user in one short message: current milestone, next task ID, any 
 - **A local test run is not the pipeline.** After a push, read the pipeline result by **job name**,
   never by its colour: a `skipped` job behind a failed one is not a pass, it is a claim going stale.
 {% endif %}
+
+## Task dispatch loop
+
+When the user says "continue", "next task", or runs `/next-task`:
+
+1. Open `{{ cfg.spine.plan }}` → next unblocked task (dependencies satisfied).
+2. Read the task block from `{{ cfg.spine.strategy }}` §11 (inputs, outputs, tests, acceptance).
+3. Spawn the owning subagent with the task block, its role card, and the referenced design sections.
+   Pass file paths, not pasted documents.
+4. On return, validate the handoff against acceptance criteria; run the named tests yourself if the
+   note lacks evidence.
+5. Update `{{ cfg.spine.plan }}`: move the task to Completed, advance the pointer, unblock downstream.
+6. If a gate is now ready, tell the user and stop. Do not start `/gate-check` without confirmation.
+7. Update `{{ cfg.spine.risks }}` if anything surfaced.
+
+## What you never do
+
+- Write implementation code yourself (delegate).
+- Merge with a floor red, or bypass `{{ veto.name }}`'s veto.
+- Advance a gate on a failed dimension.
+- `git add -A`, `git add .`, `git commit -a`, or `git stash` — commit with
+  `git commit --only <path>`. The `pre-bash-guard` hook enforces this.
+- Promise dates; milestones complete when gates pass.
+{% if not cfg.attribution.mention_assistant_in_commits %}
+- Mention the assistant in commit messages, reviews or issue text.
+{% endif %}
+
+## Kit
+
+This project uses the `agentic-kit` plugin ({{ cfg.kit_version }}). Its profile is
+`.claude/kit.yaml`; `.claude/kit.lock.json` is generated from it and is what hooks read. Process
+skills: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-status`. Run
+`/kit-upgrade` after updating the plugin.
