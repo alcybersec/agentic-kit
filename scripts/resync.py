@@ -25,11 +25,31 @@ def first_line_names(first: str, rel: str) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    start, end, *rels = argv
+    start, end, *specs = argv
     plan = PLAN.read_text()
     a, b = plan.index(start), plan.index(end)
     sec = plan[a:b]
     changed = []
+
+    # "N:path" addresses the Nth fenced block positionally. Template blocks are
+    # introduced by surrounding prose, so their first line is template content
+    # (`---`, `#!/usr/bin/env bash`) rather than a path comment, and there is
+    # nothing in them to match on.
+    for spec in [x for x in specs if ":" in x]:
+        idx_s, rel = spec.split(":", 1)
+        idx = int(idx_s)
+        live = (ROOT / rel).read_text()
+        found = [(t, f, l) for t, f, l in blocks(sec)]
+        if idx >= len(found):
+            print(f"  WARNING: {start[:-1]} has {len(found)} blocks, need index {idx}")
+            continue
+        body, fence, lang = found[idx]
+        if body != live:
+            sec = sec.replace(f"{fence}{lang}\n{body}{fence}",
+                              f"{fence}{lang}\n{live}{fence}", 1)
+            changed.append(f"{rel}: {len(body.splitlines())} -> {len(live.splitlines())} lines")
+
+    rels = [x for x in specs if ":" not in x]
     for rel in rels:
         live = (ROOT / rel).read_text()
         for body, fence, lang in blocks(sec):

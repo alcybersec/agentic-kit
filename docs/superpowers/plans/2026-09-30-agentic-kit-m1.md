@@ -1153,6 +1153,12 @@ description: {{ role.description }}
 tools: {{ role.tools | join(', ') }}
 model: inherit
 memory: project
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|NotebookEdit|MultiEdit"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ownership-guard.sh" {{ role.name }}
 ---
 
 You are the **{{ role.name }}** engineer for {{ project.name }}.
@@ -4310,6 +4316,30 @@ git commit -m "feat(hooks): pre-file-guard denying profile secret paths"
 
 ## Task 12b: per-role ownership guard
 
+> **Amended after implementation.** The committed template is the authority and differs substantially
+> from the draft. Two things the draft got wrong:
+>
+> - **Its check order excused a symlink.** It tested "owned by me → exit 0" *before* "owned by another
+>   → block", so a symlink inside a role's own tree pointing at another role's file was waved through on
+>   its lexical spelling. Every candidate spelling is now judged on its own, so the target is still seen
+>   as the other role's — verified: a link at `src/ledger/api/sneak.py` → `src/ledger/models/entry.py` is
+>   blocked, and the message names `data` as the owner rather than the link.
+> - **It used its own path stripping**, carrying the `..` and symlink holes Task 12 had to fix. It now
+>   uses `kit_candidates`.
+>
+> **The rendered guard is self-contained.** It cannot `source` the plugin's `lib/kitlock.sh`: it lives
+> in the target project and the plugin may not be installed there. So `kit_lexnorm`, `kit_candidates`
+> and `kit_match_glob` are inlined verbatim, and
+> `test_inlined_matcher_is_identical_to_the_plugin_library` extracts those three bodies from both files
+> and asserts byte equality — the extraction still prevents drift, just by assertion rather than by
+> sharing. A second test asserts the guard contains no `source` and no `CLAUDE_PLUGIN_ROOT`.
+>
+> The body is wrapped in `{% raw %}` because `${#KIT_CANDS[@]}` contains `{#`, which Jinja reads as a
+> comment opener; the tag sits on the shebang line so the shebang stays on line 1.
+>
+> This task also makes Task 9's `test_hook_scripts_are_executable` real — it was vacuous while no
+> manifest path was under `.claude/hooks/`.
+
 Exclusive file-path ownership is the kit's headline claim and until now nothing enforced it: the
 generated `settings.json` grants `Edit` at the tool level for every path, role cards state boundaries
 in prose, and `pre-file-guard` polices only `secrets`. A role editing another role's tree was caught
@@ -4496,6 +4526,76 @@ def test_the_guard_matcher_covers_every_file_mutating_tool(load_fixture):
     card = render(load_fixture("python_monolith"))[".claude/agents/data.md"]
     for tool in ("Edit", "Write", "NotebookEdit"):
         assert tool in card
+
+
+# ---- adversarial cases beyond the plan's corpus ----------------------------------
+
+def _plain(tmp_path, cfg):
+    return _install(tmp_path, cfg)
+
+
+def test_a_symlink_from_an_owned_path_into_another_roles_tree_is_blocked(tmp_path, load_fixture):
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    (tmp_path / "src/ledger/models").mkdir(parents=True)
+    (tmp_path / "src/ledger/models/entry.py").write_text("x")
+    (tmp_path / "src/ledger/api").mkdir(parents=True)
+    (tmp_path / "src/ledger/api/link.py").symlink_to(tmp_path / "src/ledger/models/entry.py")
+    r = _run(script, tmp_path, "backend", "src/ledger/api/link.py")
+    assert r.returncode == 2, r.stderr
+
+
+def test_a_dotdot_traversal_into_another_roles_tree_is_blocked(tmp_path, load_fixture):
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    r = _run(script, tmp_path, "backend", "src/ledger/api/../models/entry.py")
+    assert r.returncode == 2, r.stderr
+
+
+def test_a_symlink_from_own_memory_into_anothers_memory_is_blocked(tmp_path, load_fixture):
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    (tmp_path / ".claude/agent-memory/data").mkdir(parents=True)
+    (tmp_path / ".claude/agent-memory/data/MEMORY.md").write_text("x")
+    (tmp_path / ".claude/agent-memory/backend").mkdir(parents=True)
+    (tmp_path / ".claude/agent-memory/backend/l.md").symlink_to(
+        tmp_path / ".claude/agent-memory/data/MEMORY.md")
+    assert _run(script, tmp_path, "backend", ".claude/agent-memory/backend/l.md").returncode == 2
+
+
+def test_a_symlink_out_of_the_project_is_not_policed(tmp_path, load_fixture):
+    script = _install(tmp_path, load_fixture("python_monolith"))
+    (tmp_path / "out.txt").symlink_to("/etc/hosts")
+    assert _run(script, tmp_path, "backend", "out.txt").returncode == 0
+
+
+@pytest.mark.parametrize("role", ["backend", "data", "architect", "qa", "safety", "devops"])
+def test_strategy_and_risks_are_blocked_for_every_role(tmp_path, load_fixture, role):
+    cfg = load_fixture("python_monolith")
+    if role not in [r.name for r in cfg.roles]:
+        pytest.skip("not in this fixture")
+    script = _install(tmp_path, cfg)
+    for rel in ("docs/strategy.md", "docs/risk-register.md"):
+        assert _run(script, tmp_path, role, rel).returncode == 2, (role, rel)
+
+
+def test_the_rendered_guard_does_not_source_anything_from_the_plugin(load_fixture):
+    body = render(load_fixture("python_monolith"))[GUARD]
+    assert "CLAUDE_PLUGIN_ROOT" not in body
+    assert "source " not in body and not re.search(r"^\s*\. ", body, re.M)
+
+
+def test_inlined_matcher_is_identical_to_the_plugin_library(load_fixture):
+    """The guard inlines the path helpers because the plugin may not be installed in
+    the target project. This is the only thing standing between that copy and drift."""
+    from pathlib import Path
+    lib = (Path(__file__).parents[2] / "hooks/lib/kitlock.sh").read_text()
+    body = render(load_fixture("python_monolith"))[GUARD]
+
+    def fn(src, name):
+        m = re.search(rf"^{name}\(\) \{{.*?^\}}\n", src, re.S | re.M)
+        assert m, name
+        return m.group(0)
+
+    for name in ("kit_lexnorm", "kit_candidates", "kit_match_glob"):
+        assert fn(body, name) == fn(lib, name), name
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -4512,7 +4612,7 @@ role, and the ownership map is read from the lock at run time rather than baked 
 `/kit-upgrade` changing the map takes effect without rewriting the script.
 
 ```jinja
-#!/usr/bin/env bash
+{% raw %}#!/usr/bin/env bash
 # Per-role ownership guard. Registered by each role card's frontmatter `hooks:`
 # block, which passes that role's name as $1. Generated by agentic-kit --
 # re-render with /kit-upgrade rather than editing by hand.
@@ -4520,33 +4620,84 @@ role, and the ownership map is read from the lock at run time rather than baked 
 # Blocks a path only when it belongs to ANOTHER role. An unowned path crosses
 # nobody's boundary and is allowed: real trees are full of files the ownership
 # map never mentions, and blocking those would make this unusable.
+#
+# Self-contained on purpose: this file lives in the target project, where the
+# plugin (and so hooks/lib/kitlock.sh) may not be installed. The three path
+# helpers below are a verbatim copy of that library's; a kitgen test fails if
+# they drift. Ownership is read from the lock at run time, not baked in.
 set -uo pipefail
 
 role="${1:-}"
 [ -n "$role" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-input=$(cat)
+input=$(cat 2>/dev/null) || exit 0
 [ -n "$input" ] || exit 0
-printf '%s' "$input" | jq -e . >/dev/null 2>&1 || exit 0
+[ "$(printf '%s' "$input" | jq -r 'type' 2>/dev/null)" = "object" ] || exit 0
 
 root="${CLAUDE_PROJECT_DIR:-}"
-[ -n "$root" ] || root=$(printf '%s' "$input" | jq -r '.cwd // empty')
-[ -n "$root" ] && [ -d "$root" ] || exit 0
+[ -n "$root" ] || root=$(printf '%s' "$input" | jq -r '.cwd // empty | strings' 2>/dev/null)
+{ [ -n "$root" ] && [ -d "$root" ]; } || exit 0
 
-lock="$root/.claude/kit.lock.json"
-[ -f "$lock" ] || exit 0
-jq -e . "$lock" >/dev/null 2>&1 || exit 0
+KIT_LOCK="$root/.claude/kit.lock.json"
+[ -f "$KIT_LOCK" ] || exit 0
+# Compare the output: `jq -e` exits 0 on an EMPTY file.
+[ "$(jq -r 'type' "$KIT_LOCK" 2>/dev/null)" = "object" ] || exit 0
 
-path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')
-[ -n "$path" ] || exit 0
+# kit_lexnorm <abs-path> -- collapse //, /./ and /../ without touching the filesystem.
+# Pure parameter expansion so a newline in the path cannot split it, and no `dirname`.
+kit_lexnorm() {
+  local rest="${1#/}" seg out=""
+  while :; do
+    seg="${rest%%/*}"
+    case "$seg" in
+      ''|.) ;;
+      ..)   out="${out%/*}" ;;
+      *)    out="$out/$seg" ;;
+    esac
+    case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+  done
+  printf '%s' "${out:-/}"
+}
 
-rel="$path"
-case "$rel" in
-  "$root"/*) rel="${rel#"$root"/}" ;;
-  /*)        exit 0 ;;   # outside the project: not ours to police
-esac
-rel="${rel#./}"
+# kit_candidates <file_path> <cwd> -- project-relative spellings of the path: lexical, and
+# the realpath target, so a symlink and a `..` traversal are both seen. Returns 1 when none
+# is inside the project. Takes the root from KIT_LOCK.
+kit_candidates() {
+  local path="$1" cwd="$2" root abs lex res root_lex root_res c
+  root="${KIT_LOCK%/.claude/kit.lock.json}"
+  [ -n "$cwd" ] || cwd="$root"
+  case "$path" in /*) abs="$path" ;; *) abs="$cwd/$path" ;; esac
+  lex=$(kit_lexnorm "$abs")
+  root_lex=$(kit_lexnorm "$root"); root_res="$root_lex"
+  local -a abss=("$lex")
+  if command -v realpath >/dev/null 2>&1; then
+    res=$(realpath -m -- "$abs" 2>/dev/null) && [ "$res" != "$lex" ] && abss+=("$res")
+    root_res=$(realpath -m -- "$root" 2>/dev/null) || root_res="$root_lex"
+  fi
+  KIT_CANDS=(); export KIT_CANDS
+  for c in "${abss[@]}"; do
+    case "$c" in
+      "$root_lex"/*) KIT_CANDS+=("${c#"$root_lex"/}") ;;
+      "$root_res"/*) KIT_CANDS+=("${c#"$root_res"/}") ;;
+    esac
+  done
+  [ "${#KIT_CANDS[@]}" -gt 0 ]
+}
+
+# kit_match_glob <newline-separated patterns> -- sets KIT_MATCHED / KIT_MATCHED_REL, returns 0 on a match.
+kit_match_glob() {
+  local pattern pat c
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] || continue
+    pat="${pattern#./}"
+    for c in "${KIT_CANDS[@]}"; do
+      # shellcheck disable=SC2254  # the pattern is a glob on purpose; case anchors it
+      case "$c" in $pat) KIT_MATCHED="$pattern"; KIT_MATCHED_REL="$c"; export KIT_MATCHED KIT_MATCHED_REL; return 0 ;; esac
+    done
+  done <<<"$1"
+  return 1
+}
 
 deny() {
   jq -nc --arg m "$1" \
@@ -4554,49 +4705,55 @@ deny() {
   exit 2
 }
 
-# This role's own memory is always writable.
-case "$rel" in ".claude/agent-memory/$role/"*) exit 0 ;; esac
+path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty | strings' 2>/dev/null)
+[ -n "$path" ] || exit 0
+kit_candidates "$path" "$(printf '%s' "$input" | jq -r '.cwd // empty | strings' 2>/dev/null)" || exit 0
 
-# Refused for every role, whatever the ownership map says.
-case "$rel" in
-  .claude/agent-memory/*)
+mine=$(jq -r --arg r "$role" '.roles[]? | select(.name==$r) | .owns[]? | strings' "$KIT_LOCK" 2>/dev/null)
+others=$(jq -r --arg r "$role" '.roles[]? | select(.name!=$r) | .name as $n | .owns[]? | strings | "\($n)|\(.)"' "$KIT_LOCK" 2>/dev/null)
+all_cands=("${KIT_CANDS[@]}")
+
+# Every spelling is judged on its own: a symlink inside my tree that points into
+# another role's is two candidates, and the second one must not be excused by the first.
+for rel in "${all_cands[@]}"; do
+  KIT_CANDS=("$rel")
+
+  # This role's own memory is writable.
+  case "$rel" in ".claude/agent-memory/$role/"*) continue ;; esac
+
+  # Refused for every role, whatever the ownership map says.
+  case "$rel" in
+    .claude/agent-memory/*)
       owner="${rel#.claude/agent-memory/}"; owner="${owner%%/*}"
       deny "Blocked: ${rel} is ${owner}'s agent memory. Keep your own facts in .claude/agent-memory/${role}/." ;;
-  .claude/agents/*)
+    .claude/agents/*)
       deny "Blocked: role cards are generated by the installer, not written by agents. Ask the user to re-run /kit-upgrade if a role needs changing." ;;
-esac
-plan=$(jq -r '.spine.plan // empty' "$lock")
-if [ -n "$plan" ] && [ "$rel" = "${plan#./}" ]; then
-  deny "Blocked: ${rel} is the Orchestrator's dispatch state. Subagents never edit it -- emit a handoff note with /handoff instead."
-fi
-# A role must not rewrite the rulebook that binds it: strategy.md holds the floors
-# and the ownership map, and the register is the Orchestrator's by its own header.
-for key in strategy risks; do
-  p=$(jq -r --arg k "$key" '.spine[$k] // empty' "$lock")
-  [ -n "$p" ] || continue
-  if [ "$rel" = "${p#./}" ]; then
-    deny "Blocked: ${rel} is the operating model, not an agent's to edit -- changing it would let you widen your own boundary or weaken a floor. Raise it with the Orchestrator."
-  fi
-done
-
-# Owned by me?
-while IFS= read -r pat; do
-  [ -n "$pat" ] || continue
-  # shellcheck disable=SC2254  # the pattern is a glob on purpose
-  case "$rel" in $pat) exit 0 ;; esac
-done < <(jq -r --arg r "$role" '.roles[] | select(.name==$r) | .owns[]' "$lock")
-
-# Owned by another role? Unowned paths are allowed.
-while IFS= read -r line; do
-  other="${line%%|*}"; pat="${line#*|}"
-  [ -n "$pat" ] || continue
-  # shellcheck disable=SC2254
-  case "$rel" in
-    $pat) deny "Blocked: ${rel} is owned by \`${other}\`, not \`${role}\`. Request the change from ${other}, or ask the Orchestrator to split the task along the boundary." ;;
   esac
-done < <(jq -r --arg r "$role" '.roles[] | select(.name!=$r) | .name as $n | .owns[] | "\($n)|\(.)"' "$lock")
+  plan=$(jq -r '.spine.plan // empty | strings' "$KIT_LOCK" 2>/dev/null)
+  if [ -n "$plan" ] && [ "$rel" = "${plan#./}" ]; then
+    deny "Blocked: ${rel} is the Orchestrator's dispatch state. Subagents never edit it -- emit a handoff note with /handoff instead."
+  fi
+  # A role must not rewrite the rulebook that binds it: strategy.md holds the floors
+  # and the ownership map, and the register is the Orchestrator's by its own header.
+  for key in strategy risks; do
+    p=$(jq -r --arg k "$key" '.spine[$k] // empty | strings' "$KIT_LOCK" 2>/dev/null)
+    if [ -n "$p" ] && [ "$rel" = "${p#./}" ]; then
+      deny "Blocked: ${rel} is the operating model, not an agent's to edit -- changing it would let you widen your own boundary or weaken a floor. Raise it with the Orchestrator."
+    fi
+  done
 
+  # Mine? Then fine. Another role's and not mine? Blocked. Unowned? Allowed.
+  kit_match_glob "$mine" && continue
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    other="${line%%|*}"
+    if kit_match_glob "${line#*|}"; then
+      deny "Blocked: ${rel} is owned by \`${other}\`, not \`${role}\`. Request the change from ${other}, or ask the Orchestrator to split the task along the boundary."
+    fi
+  done <<<"$others"
+done
 exit 0
+{% endraw %}
 ```
 
 - [ ] **Step 4: Add the frontmatter block to `role.md.j2`**
