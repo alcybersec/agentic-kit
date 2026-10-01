@@ -37,7 +37,7 @@ project-specific parts generated rather than copied.
 
 ## 3. Non-goals
 
-- No MCP server in this scope. The renderer is designed so one can wrap it later (§6.4), but
+- No MCP server in this scope. The renderer is designed so one can wrap it later (§6.5), but
   nothing is built or deployed to MetaMCP. Revisit only if a non-Claude-Code caller appears.
 - No migration of the four existing projects as a deliverable. Two are retrofitted **in worktrees**
   as the acceptance test for M2; adopting the result on their real branches is a separate decision.
@@ -74,7 +74,13 @@ clients, which is not a current requirement.
 ### 4.2 The keystone: `.claude/kit.yaml`
 
 Universal skills and hooks can only stay universal if the project describes itself in a
-machine-readable file. `kit.yaml` is that file, and it doubles as the kit's presence marker.
+machine-readable file. `kit.yaml` is that file. **The presence marker, however, is
+`.claude/kit.lock.json`** — corrected 2026-10-02, because §5.1 and every hook and skill in the
+implementation test the lock, not the yaml. The two are written together, so the distinction only
+shows when something goes wrong, which is exactly when it matters: a project with a `kit.yaml` and no
+lock is one where rendering failed partway or the lock was deleted, and in that state every guard is
+correctly inert and every skill correctly declines. A marker that answered "installed" there would
+make the kit claim protection it was not providing.
 
 ### 4.3 Global-plugin inertness rule (normative)
 
@@ -89,8 +95,10 @@ payload. A missing lock is the normal case, not an error. This is covered by a t
 
 ### 4.4 Renderer purity rule (normative)
 
-`kitgen.render` MUST be a pure function `(answers, project_facts) -> dict[path, content]`. It MUST
-NOT read the project tree, write files, or call out. Detection and writing live in the skills that
+`kitgen.render` MUST be a pure function `render(cfg: KitConfig) -> dict[path, content]`. It MUST
+NOT read the project tree, write files, call out, or read the clock — `rendered_on` is a profile field
+for that reason. (Corrected 2026-10-02: this read `(answers, project_facts) -> …` and no such
+signature was ever implemented. Detection produces the profile; the renderer only ever sees it.) Detection and writing live in the skills that
 call it. This is what makes the output testable, and what keeps a future MCP wrapper small.
 
 ## 5. `kit.yaml` schema (normative)
@@ -177,7 +185,9 @@ observability: true                # when true, the "ships with the feature" rul
 - Every `roles[].name` MUST have a `.claude/agents/<name>.md` and a row in CLAUDE.md's agent table.
 - Exactly one role MAY carry `veto: true`; if any floors exist, exactly one MUST.
 - `floors` MUST be non-empty.
-- `spine.inherited` paths MUST exist on disk.
+- `spine.inherited` paths MUST exist on disk. *(Checked by `verify()` only when it is given a
+  `project_root`; with none it cannot look, and treating "absent from the manifest" as absent would
+  make every clean render verify dirty — §9.1.)*
 - `forge.cli` MUST match `forge.kind` (`gitlab`→`glab`, `github`→`gh`, `none`→`none`), and
   `forge.kind` MUST be one of `gitlab`, `github`, `none`.
 - `forge.mirror`, when set, MUST differ from `forge.kind`: a mirror is by definition not the tracker.
@@ -192,7 +202,13 @@ observability: true                # when true, the "ships with the feature" rul
   creating a new file there", while "NotebookEdit isn't covered, so add an `Edit` deny rule" — so the
   pair is the complete closure over every file tool. A `Write(path)` rule is **accepted but never
   consulted, and warns at startup**, so emitting one is strictly worse than omitting it.
-- `secrets` patterns are **root-anchored and matched whole**, like `owns` globs. `./.env` covers the
+- `secrets` patterns MUST begin `./` (enforced 2026-10-02, fix F1). They reach **two matchers with
+  different owners**: the kit's hooks, which are root-anchored and match the whole candidate path, and
+  the `Read()`/`Edit()` deny rules in `settings.json`, whose matching is Claude Code's. The two agree
+  on the `./` form and need not on any other — a bare `secrets/**` is root-anchored in the hook and may
+  match at any depth in the deny rule, so the layers would protect different sets of files while the
+  profile named one. Rejected rather than rewritten, as with `owns`. Within the hooks, patterns are
+  **root-anchored and matched whole**, like `owns` globs. `./.env` covers the
   repository root only — a nested `sub/.env` needs `./**/.env` — and `./secrets/**` covers the files
   under that directory but not a read of the directory entry itself, which exposes filenames. Both are
   traps for whoever authors a profile by hand, so the interview should prefer `./**/<name>` for any
@@ -281,7 +297,7 @@ the same worktree lesson is recorded twice in this user's notes.
 
 | Hook | Event | Blocks |
 |---|---|---|
-| `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/claude|anthropic|co-authored-by:.*claude/i` when `attribution.mention_assistant_in_commits` is false |
+| `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/co-authored-by:.*(claude\|anthropic)\|generated (with\|by).*(claude\|anthropic)\|🤖/i` when `attribution.mention_assistant_in_commits` is false |
 | `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
 | `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file, and **never fails a tool call** |
 | `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message`, the subagent's own `agent_transcript_path`, or a `SubagentHandback` call's `input` — any one of the three satisfies it |
@@ -337,7 +353,7 @@ these hooks match on **command strings**, so neither is a sandbox:
   available to carve an exception. So in a project whose `secrets` cover a directory, the template is
   readable to the hooks and still refused by the permission layer. Keep project templates outside the
   secret directory — `./.env.example` beside `./.env` is unaffected, since `./.env` does not match it.
-- Exclusive file-path ownership **is** enforced, by the per-role guard in §6.5 — but only against the
+- Exclusive file-path ownership **is** enforced, by the per-role guard in §6.4 — but only against the
   file tools. A role can still reach another role's tree through Bash (`sed -i`, a script), because
   that guard matches `Edit|Write|NotebookEdit|MultiEdit` and not command strings.
 - **The ownership guard is absent, not lenient, in an untrusted workspace** (recorded 2026-10-01).
@@ -648,6 +664,14 @@ directory, a full disk, a revoked permission mid-run.
 
 ### 7.2 Brownfield preservation rule (normative)
 
+**This binds `kit-retrofit`, which is M2. M1 does not implement it** (recorded 2026-10-02.) The only
+install path M1 ships is `kitgen render`, and `CLAUDE.md` is generated scaffolding there: `--force`
+replaces it. Fix 0.3 made the five living spine documents and all agent memory safe, and deliberately
+did not extend that to `CLAUDE.md`, because a profile change that never reaches it leaves the root
+context describing a project the kit no longer configures. So **do not point `kitgen render --force` at
+a repository with a curated `CLAUDE.md`** until the retrofit skill exists; `--force` now lists every
+file it will overwrite, and `CLAUDE.md` appears in that list.
+
 `kit-retrofit` MUST NOT discard existing `CLAUDE.md` content. Existing content is lifted **verbatim**
 into a `## Project-specific notes` section of the new CLAUDE.md. Rationale: that text holds findings
 that cost real time — JobOps records that `glab config get host` answered correctly from the git
@@ -718,7 +742,7 @@ asked individually.
 **Floors are the one question with no default and no inference.** They are the project's
 non-regressing invariants, they scope the veto role, and they become `strategy.md` §6. They do **not**
 become permission rules: a floor is an invariant ("the safety tier is append-only", "p99 under
-200 ms"), not a command string, and nothing in the rendered `settings.json` reads `floors`. The installer MUST block on the user's answer rather than guess.
+200 ms"), not a command string, and nothing in the rendered `settings.json` reads `floors`. The installer MUST block on the user's answer rather than guess. **The installer is M2**, so nothing enforces this in M1 (recorded 2026-10-02): `kitgen` requires `floors` to be non-empty and says nothing about where its content came from, and a profile written by hand can carry a floor nobody agreed to.
 
 ### 8.4 Role roster derivation
 
@@ -751,11 +775,19 @@ renames, merges or drops. Ownership globs are generated from the directories and
 Runs against a rendered manifest, before anything is written:
 
 - CLAUDE.md agent table rows == `.claude/agents/*.md` files == `kit.yaml roles[].name`.
-- `roles[].owns` globs are pairwise non-overlapping and, on brownfield, every **detected source
-  directory** is owned by exactly one role. Detected source directories exclude anything matched by
-  `.gitignore`, plus `node_modules/`, `data/`, `.venv/`, build and cache directories: a tree can hold
-  directories no role should own, and requiring coverage of those would make the check unsatisfiable.
-- `/handoff`'s role-specific lines == the union of `roles[].handoff_extra`.
+- `roles[].owns` globs are pairwise non-overlapping. *(Implemented in `KitConfig.validate()`, not in
+  `verify()`: a profile that overlaps never renders.)*
+- **M2.** On brownfield, every **detected source directory** is owned by exactly one role. Detected
+  source directories exclude anything matched by `.gitignore`, plus `node_modules/`, `data/`, `.venv/`,
+  build and cache directories: a tree can hold directories no role should own, and requiring coverage
+  of those would make the check unsatisfiable. **Not implemented in M1** (recorded 2026-10-02): it
+  needs detection, which means reading the project tree, which `verify()` does only for the presence of
+  `spine.inherited` paths. It belongs to the retrofit skill that does the detecting.
+- Each role's `handoff_extra` lines appear in **that role's own agent card**. *(Corrected
+  2026-10-02: this said "`/handoff`'s role-specific lines == the union of `roles[].handoff_extra`",
+  describing a check that cannot exist — `/handoff` is a static skill shipped with the plugin and
+  cannot list per-project lines. The card is where they are rendered, and where the subagent reads
+  them, so the card is what is checked.)*
 - `strategy.md` ownership table == `kit.yaml roles[].owns`.
 - `settings.json` deny entries cover every `secrets` path.
 - Every `load_order` and `spine` path is either rendered in this manifest or exists on disk.
@@ -790,8 +822,10 @@ cross-references**, not prose, so template wording can change without churning f
 
 ### 9.3 Inertness test
 
-A fixture directory with no `kit.yaml`: every hook exits 0 and emits nothing; every process skill
-declines. This guards the whole-machine blast radius of a globally installed plugin.
+A fixture directory with no `.claude/kit.lock.json`: every hook exits 0 and emits nothing; every
+process skill declines. (Corrected 2026-10-02: this said `kit.yaml`. The lock is what the code reads,
+and the suite tests the lock's absence, an unparseable lock, a zero-byte lock, and a lock that is a
+directory.) This guards the whole-machine blast radius of a globally installed plugin.
 
 ### 9.4 Acceptance tests
 

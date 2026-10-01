@@ -389,3 +389,29 @@ def test_an_attribution_line_early_in_a_long_message_is_still_blocked(tmp_path):
     r = run_hook(HOOK, bash_payload(f"git commit --only src/a.py -m '{body}'", p), p)
     assert r.returncode == 2, (r.returncode, r.stderr[:200])
     assert "attribution" in r.stderr.lower()
+
+
+@pytest.mark.parametrize("command", [
+    "git add -A -- src/a.py",
+    "git add --all -- src/a.py src/b.py",
+    "git add -A -- src/",
+])
+def test_git_add_all_limited_by_a_pathspec_is_allowed(tmp_path, command):
+    """`git add -A -- <path>` stages only that pathspec, so it IS the explicit
+    staging this rule asks for. Refusing it blocked a legitimate command with a
+    message telling the agent to do what it had just done."""
+    p = make_project(tmp_path)
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "git add -A -- .",
+    "git add -A -- ./",
+    "git add -A",
+    "git add -A src/a.py",          # no `--`: not a pathspec-limited form
+])
+def test_the_pathspec_exemption_does_not_reopen_the_sweep(tmp_path, command):
+    p = make_project(tmp_path)
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 2, (command, r.stdout, r.stderr)

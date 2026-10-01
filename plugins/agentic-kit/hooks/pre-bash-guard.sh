@@ -121,6 +121,21 @@ check_segment() {
       local sub="${args[0]}"; args=("${args[@]:1}")
       case "$sub" in
         add)
+          # `git add -A -- <path>` is limited to that pathspec, so it is exactly the
+          # explicit staging this rule asks for and must not be refused. A pathspec
+          # of `.` or `./` after the `--` is the sweep again, so it still blocks.
+          local scoped=0 seendd=0
+          for a in "${args[@]}"; do
+            if [ "$seendd" -eq 1 ]; then
+              case "$a" in
+                .|./) scoped=0; break ;;
+                *) scoped=1 ;;
+              esac
+            elif [ "$a" = "--" ]; then
+              seendd=1
+            fi
+          done
+          [ "$scoped" -eq 1 ] && return 0
           for a in "${args[@]}"; do
             case "$a" in
               -A|--all|.|./|-[!-]*A*)

@@ -88,3 +88,35 @@ def test_the_sync_tooling_is_importable(name):
     """Each of these broke at least once during the build; an ImportError in the
     tool that guards the plan is a silent loss of the guard."""
     assert _load(name) is not None
+
+
+def test_resync_widens_the_fence_for_content_that_contains_one():
+    """A block whose body holds ``` cannot be delimited by ```: the inner fence ends
+    the outer one, the plan keeps a truncated copy, and the orphaned tail swallows
+    what follows. That happened twice in this build — once to CONTRACTS.md.j2 and
+    once when CLAUDE.md.j2 gained a command block — so the fence is computed from the
+    content rather than carried over."""
+    resync = _load("resync")
+    assert resync.fence_for("no fences here", "```") == "```"
+    assert resync.fence_for("holds a ```json block\n```\n", "```") == "````"
+    assert resync.fence_for("holds a ````wide block\n````\n", "```") == "`````"
+    # An opener with a language does NOT close a block, so it forces no widening —
+    # otherwise every template mentioning ```bash would churn the plan.
+    assert resync.fence_for("see ```bash for the shape", "```") == "```"
+    # Never narrows: an already-wide block stays wide.
+    assert resync.fence_for("plain", "````") == "````"
+
+
+def test_every_plan_block_fence_contains_its_body():
+    """The invariant the helper exists to keep, asserted over the real plan."""
+    fences = _load("fences")
+    import re
+    plan = (REPO / "docs/superpowers/plans/2026-09-30-agentic-kit-m1.md").read_text()
+    for body, fence, lang in fences.blocks(plan):
+        # A BARE fence line is the only thing that closes a block; `` ```json `` is
+        # an opener and passes through. So this is the exact truncation condition.
+        longest = max((len(m) for m in re.findall(r"^(`{3,})[ \t]*$", body, re.M)),
+                      default=0)
+        assert longest < len(fence), (
+            f"a ```{lang} block delimited by {len(fence)} backticks contains a bare "
+            f"fence of {longest}: everything after it is outside the block")

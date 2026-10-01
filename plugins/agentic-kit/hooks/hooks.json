@@ -13,7 +13,7 @@
         ]
       },
       {
-        "matcher": "Read|Edit|Write|NotebookEdit",
+        "matcher": "Read|Edit|Write|NotebookEdit|MultiEdit",
         "hooks": [
           {
             "type": "command",

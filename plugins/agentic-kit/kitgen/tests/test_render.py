@@ -149,7 +149,7 @@ def test_claude_md_has_every_section(load_fixture):
         # the Forge section is conditional on there being a forge
         assert ("## Forge:" in body) == (cfg.forge.kind != "none"), name
         assert body.rstrip().endswith(
-            "a disarmed guard looks exactly like an inert one."), name
+            "a curated CLAUDE.md should be backed up first."), name
 
 
 def test_claude_md_is_well_formed_markdown(load_fixture):
@@ -205,3 +205,50 @@ def test_render_module_contract():
               ".claude/agents/backend.md", ".claude/hooks/ownership-guard.sh",
               ".claude/kit.yaml", ".claude/kit.lock.json"):
         assert not is_preserved(p), p
+
+
+def test_the_claude_md_agent_table_header_describes_its_own_cells(load_fixture):
+    """The header said `| Agent | Owns |` while the second cell held the role's
+    description, so the one table the root context file shows named a column it did
+    not contain — and the ownership map it implied was nowhere in CLAUDE.md at all."""
+    for name in ("greenfield_prd", "python_monolith", "services_layout"):
+        cfg = load_fixture(name)
+        body = render(cfg)["CLAUDE.md"]
+        lines = body.splitlines()
+        i = next(n for n, l in enumerate(lines) if l.startswith("| Agent |"))
+        headers = [c.strip() for c in lines[i].strip("|").split("|")]
+        assert headers == ["Agent", "Owns", "Responsibility"], (name, headers)
+        rows = {}
+        for l in lines[i + 2:]:
+            if not l.startswith("| `"):
+                break
+            cells = [c.strip() for c in l.strip().strip("|").split("|")]
+            rows[cells[0].strip("`")] = cells
+        for r in cfg.roles:
+            cells = rows[r.name]
+            for g in r.owns:
+                assert f"`{g}`" in cells[1], (name, r.name, g, cells[1])
+            assert r.description in cells[2], (name, r.name)
+
+
+def test_claude_md_lists_every_shipped_skill(load_fixture):
+    """It listed six of the nine. A skill nobody is told about is a skill nobody
+    runs, and `/kit-doctor` in particular has to be discoverable: it is the only
+    thing that reports a guard which has gone quiet."""
+    from pathlib import Path
+    skills = {p.name for p in (Path(__file__).resolve().parents[2] / "skills").iterdir()
+              if p.is_dir()}
+    body = render(load_fixture("python_monolith"))["CLAUDE.md"]
+    for skill in sorted(skills):
+        assert f"`/{skill}`" in body, skill
+
+
+def test_claude_md_gives_a_working_re_render_command(load_fixture):
+    """The install command existed only in a cli.py docstring, while the generated
+    files pointed at `/kit-upgrade`, which is M2 and does not exist. A root context
+    file that names a command the project does not have is worse than silence."""
+    body = render(load_fixture("python_monolith"))["CLAUDE.md"]
+    assert "kitgen render" in body
+    assert "--profile .claude/kit.yaml" in body
+    assert "--dry-run" in body, "the dry run is what makes --force safe to recommend"
+    assert "does** replace this file" in body, "CLAUDE.md is not preserved; say so"

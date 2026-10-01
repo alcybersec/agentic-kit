@@ -54,3 +54,14 @@ def test_no_unknown_hook_event_is_declared():
     known = {"PreToolUse", "PostToolUse", "SubagentStop", "SessionStart",
              "UserPromptSubmit", "Stop", "Notification", "PreCompact"}
     assert set(load()) <= known, set(load()) - known
+
+
+def test_the_file_guard_matcher_covers_every_file_writing_tool():
+    """The ownership guard's own matcher lists MultiEdit; the plugin's file guard did
+    not, so a secret path would have been readable through it. Harmless if the host
+    has no such tool, and the whole guard otherwise if it does."""
+    entries = load()["PreToolUse"]
+    matchers = [e["matcher"] for e in entries if "matcher" in e]
+    file_matcher = next(m for m in matchers if "Read" in m)
+    for tool in ("Read", "Edit", "Write", "NotebookEdit", "MultiEdit"):
+        assert tool in file_matcher.split("|"), (tool, file_matcher)

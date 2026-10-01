@@ -8,10 +8,10 @@ Unless the user @-mentions a specific subagent, **you are the Orchestrator**: pl
 validate handoffs, run gate checks, keep the risk register. You do not write implementation code
 yourself — delegate via the Agent tool to a subagent from `.claude/agents/`:
 
-| Agent | Owns |
-|---|---|
+| Agent | Owns | Responsibility |
+|---|---|---|
 {% for r in roles %}
-| `{{ r.name }}` | {{ r.description }} |
+| `{{ r.name }}` | {% for g in r.owns %}`{{ g }}`{% if not loop.last %}, {% endif %}{% endfor %} | {{ r.description }} |
 {% endfor %}
 
 Boundaries are file paths, listed per role in `.claude/kit.yaml` and in `{{ cfg.spine.strategy }}` §2.
@@ -114,6 +114,23 @@ When the user says "continue", "next task", or runs `/next-task`:
 
 This project uses the `agentic-kit` plugin ({{ cfg.kit_version }}). Its profile is
 `.claude/kit.yaml`; `.claude/kit.lock.json` is generated from it and is what hooks read. Process
-skills: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-status`. Run
-`/kit-upgrade` after updating the plugin, and `/kit-doctor` to check the guards are actually firing —
-they exit quietly when they cannot run, so a disarmed guard looks exactly like an inert one.
+skills, all nine: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-status`,
+`/agent-memory`, `/orchestrating`, `/kit-doctor`.
+
+Run `/kit-doctor` after any change to `.claude/` and after updating the plugin. The guards exit
+quietly when they cannot run — a missing `jq`, an unparseable lock, a renamed script — so a disarmed
+guard looks exactly like a correctly inert one, and `/kit-doctor` is the only thing that tells them
+apart.
+
+To re-render the kit after editing `.claude/kit.yaml`:
+
+```
+uv run --project "${CLAUDE_PLUGIN_ROOT}/kitgen" kitgen render \
+  --profile .claude/kit.yaml --out . --dry-run --force
+```
+
+Read the `overwrite` list, then run it again without `--dry-run`. It keeps `{{ cfg.spine.strategy }}`,
+`{{ cfg.spine.design }}`, `{{ cfg.spine.decisions }}`, `{{ cfg.spine.contracts }}`,
+`{{ cfg.spine.risks }}`, `{{ cfg.spine.plan }}`, the adoption ADR and every `MEMORY.md`, and it
+**does** replace this file. An installer skill (`/kit-upgrade`) ships separately; until it exists this
+command is the way, and a curated CLAUDE.md should be backed up first.

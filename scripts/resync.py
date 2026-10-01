@@ -9,6 +9,7 @@ once replaced with the whole hook body, because the command names the file too.
 Usage: resync.py "## Task 11:" "## Task 12:" <repo-relative-path>...
 """
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -23,6 +24,22 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # cheap cross-check -- it has to agree with the file's own kind.
 FENCE_LANG = {".j2": "jinja", ".py": "python", ".sh": "bash", ".json": "json",
               ".md": "markdown", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml"}
+
+
+def fence_for(content: str, current: str) -> str:
+    """A fence long enough to contain `content`.
+
+    A block whose body holds ``` cannot be delimited by ``` — the inner fence ends
+    the outer one, the plan keeps a truncated copy, and the orphaned tail swallows
+    whatever follows. That happened twice in this build, so the fence is computed
+    from the content rather than carried over from the block being replaced.
+    """
+    # Only a line that is backticks ALONE closes a block (see fences.py), so an
+    # opener like ```json inside the body is harmless and must not force a widening
+    # that would churn the plan.
+    longest = max((len(m) for m in re.findall(r"^(`{3,})[ \t]*$", content, re.M)),
+                  default=0)
+    return "`" * max(len(current), longest + 1, 3)
 PLAN = ROOT / "docs/superpowers/plans/2026-09-30-agentic-kit-m1.md"
 
 
@@ -53,6 +70,7 @@ def main(argv: list[str]) -> int:
             missed.append(f"{start[:-1]} has {len(found)} blocks, need index {idx}")
             continue
         body, fence, lang = found[idx]
+        new_fence = fence_for(live, fence)
         want = FENCE_LANG.get(pathlib.Path(rel).suffix)
         if want and lang != want:
             missed.append(
@@ -60,10 +78,12 @@ def main(argv: list[str]) -> int:
                 f"{rel} belongs in a ```{want} one -- refusing to overwrite it. "
                 f"Check the index against check_plan_sync.py's table.")
             continue
-        if body != live:
+        if body != live or new_fence != fence:
             sec = sec.replace(f"{fence}{lang}\n{body}{fence}",
-                              f"{fence}{lang}\n{live}{fence}", 1)
-            changed.append(f"{rel}: {len(body.splitlines())} -> {len(live.splitlines())} lines")
+                              f"{new_fence}{lang}\n{live}{new_fence}", 1)
+            note = "" if new_fence == fence else f", fence {len(fence)}->{len(new_fence)}"
+            changed.append(f"{rel}: {len(body.splitlines())} -> "
+                           f"{len(live.splitlines())} lines{note}")
 
     rels = [x for x in specs if ":" not in x]
     for rel in rels:
