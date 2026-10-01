@@ -1827,10 +1827,10 @@ to `open`. §10 Status is derived from `{{ cfg.spine.plan }}`, which is authorit
 - [ ] The user has reviewed {% if cfg.spine.inherited %}{% for p in cfg.spine.inherited %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} and {% endif %}this file.
 - [ ] The role roster in §2 is accepted.
 - [ ] The floors in §6 are accepted.
-- [ ] Every role named in the M0 table below has a test path it owns in §2, or test paths are left
-  unowned. If every test path belongs to one role, decide with the user who owns what before
-  dispatching — the ownership guard blocks a role from writing another's tree, so an unowned decision
-  here stalls every M0 task that has to write a test.
+- [ ] Each M0 row's assigned role owns somewhere its output sensibly belongs. Every row routes its
+  write into a path that role already owns, so the ownership guard blocks nothing — but check the
+  result reads sensibly: a role whose only paths are documentation has nowhere natural to put a test,
+  and that is a sign the ownership map needs adjusting before dispatch rather than after.
 {% if forge.kind != 'none' %}
 - [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
 {% endif %}
@@ -2098,19 +2098,41 @@ git commit -m "feat(kitgen): docs spine templates, M0-only task graph"
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# plugins/agentic-kit/kitgen/tests/test_verify.py
 import json
 
+import pytest
+
+from kitgen.model import KitConfig
 from kitgen.render import render
 from kitgen.verify import verify
 
 FIXTURES = ["greenfield_prd", "python_monolith", "services_layout"]
 
 
+def _variant(cfg, edit):
+    """A valid profile derived from cfg: edit(lock_dict) then re-validate."""
+    lock = cfg.to_lock()
+    edit(lock)
+    return KitConfig.from_dict(lock)
+
+
+def _role(lock, name):
+    return next(r for r in lock["roles"] if r["name"] == name)
+
+
 def test_freshly_rendered_manifests_verify_clean(load_fixture):
     for name in FIXTURES:
         cfg = load_fixture(name)
         assert verify(render(cfg), cfg) == [], name
+
+
+def test_clean_with_a_project_root_holding_the_inherited_files(load_fixture, tmp_path):
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        for p in cfg.spine["inherited"]:
+            (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / p).write_text("x")
+        assert verify(render(cfg), cfg, project_root=tmp_path) == [], name
 
 
 def test_an_m0_owner_absent_from_the_roster_is_reported(load_fixture):
@@ -2123,17 +2145,59 @@ def test_an_m0_owner_absent_from_the_roster_is_reported(load_fixture):
     assert any("devops" in p for p in verify(man, cfg))
 
 
+def test_profile_without_devops_is_reported(load_fixture):
+    cfg = _variant(load_fixture("python_monolith"),
+                   lambda l: l.update(roles=[r for r in l["roles"]
+                                             if r["name"] != "devops"]))
+    problems = verify(render(cfg), cfg)
+    assert any("'devops'" in p and "assigned to nobody" in p for p in problems)
+
+
+def test_an_m0_task_assigned_to_an_unknown_role_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = man[s].replace("-S1-QA-004 | `qa` |", "-S1-QA-004 | `ghost` |")
+    assert any("'ghost'" in p and "not in roles[]" in p for p in verify(man, cfg))
+
+
 def test_a_veto_role_owning_no_path_is_reported(load_fixture):
-    """services_layout gives qa all of tests/** and safety no test path at all, so the
-    M0 floor-tier task is unexecutable under the ownership guard. A veto role owning
-    nothing at all is the degenerate form of the same problem."""
-    from kitgen.model import KitConfig
-    lock = load_fixture("python_monolith").to_lock()
-    for r in lock["roles"]:
-        if r["veto"]:
-            r["owns"] = []
-    bare = KitConfig.from_dict(lock)
-    assert any("veto" in p.lower() for p in verify(render(bare), bare))
+    cfg = _variant(load_fixture("python_monolith"),
+                   lambda l: _role(l, "safety").update(owns=[]))
+    assert any("veto" in p.lower() and "owns no path" in p
+               for p in verify(render(cfg), cfg))
+
+
+def test_architect_owning_no_path_is_reported(load_fixture):
+    """The ARCH row says 'a path architect owns per §2'; with no owned path it
+    is unexecutable."""
+    cfg = _variant(load_fixture("python_monolith"),
+                   lambda l: _role(l, "architect").update(owns=[]))
+    assert any("'architect'" in p and "owns no path" in p
+               for p in verify(render(cfg), cfg))
+
+
+def test_ci_owned_by_a_role_other_than_the_ci_wiring_row_is_reported(load_fixture):
+    def edit(l):
+        _role(l, "devops")["owns"] = ["docker/**"]
+        _role(l, "architect")["owns"].append(".github/workflows/**")
+    cfg = _variant(load_fixture("python_monolith"), edit)
+    problems = verify(render(cfg), cfg)
+    assert any(".github/workflows" in p and "architect" in p and "devops" in p
+               for p in problems)
+
+
+def test_missing_ci_wiring_row_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = man[s].replace("wired into `.github/workflows`", "wired into CI")
+    assert any("CI-wiring" in p for p in verify(man, cfg))
+
+
+def test_no_ci_row_is_expected_when_there_is_no_forge(load_fixture):
+    cfg = load_fixture("greenfield_prd")
+    assert not any("CI" in p for p in verify(render(cfg), cfg))
 
 
 def test_missing_role_card_is_reported(load_fixture):
@@ -2144,11 +2208,36 @@ def test_missing_role_card_is_reported(load_fixture):
     assert any("data" in p and "agents/data.md" in p for p in problems)
 
 
+def test_stray_agent_card_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    man[".claude/agents/ghost.md"] = "x"
+    assert any("'ghost'" in p for p in verify(man, cfg))
+
+
 def test_role_absent_from_the_claude_md_table_is_reported(load_fixture):
     cfg = load_fixture("python_monolith")
     man = render(cfg)
-    man["CLAUDE.md"] = man["CLAUDE.md"].replace("`data`", "`dta`")
-    assert any("CLAUDE.md" in p and "data" in p for p in verify(man, cfg))
+    man["CLAUDE.md"] = man["CLAUDE.md"].replace("| `data` |", "| `dta` |")
+    problems = verify(man, cfg)
+    assert any("CLAUDE.md" in p and "'data'" in p for p in problems)
+    assert any("CLAUDE.md" in p and "'dta'" in p for p in problems)
+
+
+def test_kit_yaml_roles_disagreeing_with_the_config_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    man[".claude/kit.yaml"] = man[".claude/kit.yaml"].replace(
+        "name: backend", "name: backendd")
+    assert any("kit.yaml" in p and "roles" in p for p in verify(man, cfg))
+
+
+def test_strategy_ownership_glob_mismatch_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = man[s].replace("`alembic/**`", "`alembic2/**`")
+    assert any("'data'" in p and "alembic" in p for p in verify(man, cfg))
 
 
 def test_handoff_extra_missing_from_a_role_card_is_reported(load_fixture):
@@ -2157,6 +2246,14 @@ def test_handoff_extra_missing_from_a_role_card_is_reported(load_fixture):
     man[".claude/agents/data.md"] = man[".claude/agents/data.md"].replace(
         "MIGRATION:", "MIGRATIONS:")
     assert any("MIGRATION:" in p for p in verify(man, cfg))
+
+
+def test_handoff_extra_missing_from_the_strategy_table_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = man[s].replace("`MIGRATION:`", "`OTHER:`")
+    assert any("handoff extras" in p and "'data'" in p for p in verify(man, cfg))
 
 
 def test_secret_not_denied_in_settings_is_reported(load_fixture):
@@ -2171,9 +2268,31 @@ def test_secret_not_denied_in_settings_is_reported(load_fixture):
 
 def test_spine_path_neither_rendered_nor_on_disk_is_reported(load_fixture, tmp_path):
     cfg = load_fixture("services_layout")
-    man = render(cfg)
-    problems = verify(man, cfg, project_root=tmp_path)
+    problems = verify(render(cfg), cfg, project_root=tmp_path)
     assert any("docs/PRD.md" in p for p in problems)
+
+
+def test_spine_path_the_renderer_does_not_produce_is_reported(load_fixture, tmp_path):
+    """render() hardcodes docs/design.md; a profile pointing elsewhere is only
+    caught here."""
+    def edit(l):
+        l["spine"]["design"] = "docs/elsewhere.md"
+    cfg = _variant(load_fixture("python_monolith"), edit)
+    problems = verify(render(cfg), cfg, project_root=tmp_path)
+    assert any("spine.design" in p and "docs/elsewhere.md" in p for p in problems)
+
+
+def test_without_a_project_root_the_disk_checks_are_skipped(load_fixture):
+    cfg = load_fixture("services_layout")  # inherits docs not in the manifest
+    assert verify(render(cfg), cfg) == []
+
+
+def test_load_order_path_neither_rendered_nor_on_disk_is_reported(load_fixture, tmp_path):
+    def edit(l):
+        l["load_order"].append({"path": "docs/nowhere.md", "mode": "full"})
+    cfg = _variant(load_fixture("python_monolith"), edit)
+    problems = verify(render(cfg), cfg, project_root=tmp_path)
+    assert any("load_order" in p and "docs/nowhere.md" in p for p in problems)
 
 
 def test_inherited_path_present_on_disk_is_accepted(load_fixture, tmp_path):

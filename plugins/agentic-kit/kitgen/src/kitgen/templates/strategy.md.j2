@@ -100,10 +100,10 @@ to `open`. §10 Status is derived from `{{ cfg.spine.plan }}`, which is authorit
 - [ ] The user has reviewed {% if cfg.spine.inherited %}{% for p in cfg.spine.inherited %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} and {% endif %}this file.
 - [ ] The role roster in §2 is accepted.
 - [ ] The floors in §6 are accepted.
-- [ ] Every role named in the M0 table below has a test path it owns in §2, or test paths are left
-  unowned. If every test path belongs to one role, decide with the user who owns what before
-  dispatching — the ownership guard blocks a role from writing another's tree, so an unowned decision
-  here stalls every M0 task that has to write a test.
+- [ ] Each M0 row's assigned role owns somewhere its output sensibly belongs. Every row routes its
+  write into a path that role already owns, so the ownership guard blocks nothing — but check the
+  result reads sensibly: a role whose only paths are documentation has nowhere natural to put a test,
+  and that is a sign the ownership map needs adjusting before dispatch rather than after.
 {% if forge.kind != 'none' %}
 - [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
 {% endif %}

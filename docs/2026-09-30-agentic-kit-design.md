@@ -535,10 +535,16 @@ Runs against a rendered manifest, before anything is written:
 - `milestones.outline` is non-empty. `strategy.md` and `plan/README.md` both index `outline[0]`, so an
   empty list surfaces as a Jinja `UndefinedError` rather than a `ConfigError` — the exact failure mode
   §5.2 exists to prevent.
-- The role that owns `forge.ci` is the role the CI-wiring task row names, and every role named in the
-  §11 M0 table either owns a test path or no role owns one. Both encode the same lesson: a generated
-  task row that instructs a write the assigned role cannot make is unexecutable, and it was found
-  twice by rendering rather than by any test. A veto role owning nothing cannot build the floor tier that
+- The role that owns `forge.ci` is the role the CI-wiring task row names.
+- Any M0 row that directs a write into "a path `<role>` owns per §2" names a role that owns at least
+  one path. Both encode the same lesson: a generated task row instructing a write the assigned role
+  cannot make is unexecutable, and it was found twice by rendering rather than by any test.
+
+  An earlier draft of this bullet demanded that every role named in the M0 table own a *test* path.
+  That was wrong: `architect` and `devops` own no test path in any of the three fixtures and none of
+  them needs one, because each row now routes its write into a path its own role holds. The literal
+  check would have failed all three clean renders — the worst outcome for a verifier, since a tool
+  that reports phantom problems stops being read. A veto role owning nothing cannot build the floor tier that
   the M0 gate requires — and if every test path belongs to another role, the ownership guard (§6.4)
   blocks that task outright, which is why §11's M0 entry conditions make the tier's home an explicit
   decision rather than an assumption.
