@@ -162,6 +162,14 @@ rendered.
 > than being coerced; `veto_role` raises `ConfigError` rather than `StopIteration`; `from_dict` copies
 > every mutable section; and five further negative tests cover the mirror, unknown-kind,
 > missing-key, non-boolean and segment-truncation paths.
+>
+> **Second amendment round.** `from_dict` rejects unknown role keys (a misspelled
+> `handoff_extra` silently loaded as `[]` and Task 8's check passes vacuously on an empty list, so a
+> `data` role lost `MIGRATION:` and `PII COLUMNS:` with no signal); shape-checks each section before
+> copying (a scalar where a mapping belongs raised a bare `ValueError`, which is **not** a
+> `ConfigError`, so it escaped the CLI handler and exited 1 instead of 2); rejects non-normalised
+> `owns` globs (`./src/**` vs `src/**` compare as disjoint textually while overlapping in fact, and
+> §5's own `./.env` convention invites the mistake); and deep-copies the nested sections.
 
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/model.py`
@@ -1985,6 +1993,19 @@ def test_unparseable_yaml_exits_two(tmp_path, capsys):
     bad.write_text("kit_version: [1.0.0\n")
     assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
     assert "invalid profile" in capsys.readouterr().err
+
+
+def test_a_scalar_where_a_mapping_belongs_exits_two(tmp_path, capsys):
+    """Regression: this path raised a bare ValueError from dict(), which is not a
+    ConfigError, so it escaped the handler and exited 1 instead of 2."""
+    import yaml as _yaml
+    raw = _yaml.safe_load(
+        (Path(__file__).parent / "fixtures/services_layout/profile.yaml").read_text())
+    raw["spine"] = "docs/strategy.md"
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(_yaml.safe_dump(raw))
+    assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
+    assert "spine" in capsys.readouterr().err
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1996,7 +2017,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'kitgen.cli'`
 
 ```python
 # plugins/agentic-kit/kitgen/src/kitgen/__init__.py
-from .model import ConfigError, KitConfig
+from .model import KitConfig
 from .render import render
 from .verify import verify
 
@@ -2045,7 +2066,11 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "rendered_on", None):
             raw["rendered_on"] = args.rendered_on
         cfg = KitConfig.from_dict(raw)
-    except (ConfigError, KeyError, TypeError, yaml.YAMLError) as exc:
+    except (ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+        # ValueError subsumes ConfigError. It is deliberately broad: this block only
+        # loads and validates a profile, so any ValueError raised inside it means a
+        # bad profile. A bare ValueError is NOT a ConfigError, and leaving it uncaught
+        # exits 1 ("verification problems") instead of 2 ("bad profile").
         print(f"invalid profile: {exc}", file=sys.stderr)
         return 2
 

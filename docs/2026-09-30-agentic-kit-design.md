@@ -182,6 +182,14 @@ observability: true                # when true, the "ships with the feature" rul
   which is neither a `ConfigError` nor actionable.
 - `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
   coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
+- Ownership globs MUST be **normalised**: repository-root-relative, with no leading `./`, no `//` and
+  no `../`. Overlap is decided on literal path prefixes, so `./src/**` and `src/**` would compare as
+  disjoint while overlapping in fact — and §5's `secrets: ["./.env"]` establishes the leading-`./`
+  convention in the same file, which makes the mistake a natural one. A non-normalised glob is
+  rejected rather than silently rewritten.
+- Role entries MUST carry no unknown keys. A misspelled `handoff_extra` would otherwise load as an
+  empty list, and §9.1's per-role handoff check passes vacuously on an empty list — so the role card
+  would render with no handoff lines and nothing downstream would notice.
 - Ownership globs MUST be directory-rooted. Overlap is decided on literal directory prefixes, so a
   glob whose first segment is wild has no prefix and is treated as overlapping everything: that makes
   extension-partitioned ownership of a shared tree (`app/**/*.py` vs `app/**/*.tsx`) invalid by
