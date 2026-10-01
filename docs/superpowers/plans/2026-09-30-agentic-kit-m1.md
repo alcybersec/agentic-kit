@@ -561,7 +561,7 @@ roles:
   - {name: safety, description: "Floors.", owns: ["tests/safety/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true}
 floors: ["no plaintext credentials in the tree"]
 test_tiers: {unit: 85, integration: 75, floor: 95}
-toolchain: {pm: poetry, test: "poetry run pytest", format: "black .", lint: "ruff check", types: mypy}
+toolchain: {pm: poetry, test: "poetry run pytest", format: "black", lint: "ruff check", types: mypy}
 secrets: ["./.env", "./config/secrets.yaml"]
 observability: true
 ```
@@ -1422,7 +1422,7 @@ def test_toolchain_commands_are_allowed(load_fixture):
     cfg = load_fixture("python_monolith")
     allow = settings(cfg)["permissions"]["allow"]
     assert "Bash(poetry run pytest:*)" in allow
-    assert "Bash(black .:*)" in allow
+    assert "Bash(black:*)" in allow
 
 
 def test_subagent_spawn_depth_is_capped(load_fixture):

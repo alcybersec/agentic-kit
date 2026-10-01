@@ -263,3 +263,22 @@ def test_documented_limit_a_quoted_note_on_its_own_line_passes(tmp_path):
 def test_stop_check_is_inert_with_no_lock_whatever_fields_are_present(tmp_path, fields):
     r = run_hook("subagent-stop-check.sh", {"cwd": str(tmp_path), **fields}, tmp_path)
     assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+def test_format_hook_passes_the_edited_file_as_the_only_argument(tmp_path):
+    """The hook appends the edited file to `toolchain.format`.
+
+    A command carrying its own target would therefore format that target as well
+    -- `black . <file>` rewrites the whole tree from a PostToolUse hook that no
+    ownership matcher covers. `model.py` rejects such a command; this pins the
+    other half of the contract: the hook adds exactly one argument, and the
+    formatter sees nothing else.
+    """
+    argv = tmp_path / "argv"
+    stub = tmp_path / "stub.sh"
+    stub.write_text(f'for a in "$@"; do echo "$a"; done > "{argv}"\n')
+    p = make_project(tmp_path, fmt=f"sh {stub}")
+    r = run_hook("post-edit-format.sh",
+                 file_payload("Edit", str(p / "src/a.py"), p), p)
+    assert r.returncode == 0
+    assert argv.read_text().split() == [str(p / "src/a.py")]

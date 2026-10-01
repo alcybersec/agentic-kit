@@ -74,7 +74,7 @@ def test_toolchain_commands_are_allowed(load_fixture):
     cfg = load_fixture("python_monolith")
     allow = settings(cfg)["permissions"]["allow"]
     assert "Bash(poetry run pytest:*)" in allow
-    assert "Bash(black .:*)" in allow
+    assert "Bash(black:*)" in allow
 
 
 def test_subagent_spawn_depth_is_capped(load_fixture):

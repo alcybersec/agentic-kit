@@ -184,6 +184,44 @@ def test_empty_toolchain_value_is_rejected(value):
         KitConfig.from_dict(bad)
 
 
+@pytest.mark.parametrize("fmt", [
+    "black .",            # the shipped python_monolith fixture, until 2026-10-01
+    "black ./",
+    "ruff format .",
+    "prettier --write .",
+    "cargo fmt --all",
+    "prettier --write src/",
+    "black src/*.py",
+    "ruff format app/main.py",
+])
+def test_format_command_carrying_its_own_target_is_rejected(fmt):
+    """`post-edit-format.sh` appends the edited file, so a command that already
+    names a target reformats that target too -- on every single edit, from a
+    PostToolUse hook that no ownership matcher covers."""
+    bad = {**MINIMAL, "toolchain": {**MINIMAL["toolchain"], "format": fmt}}
+    with pytest.raises(ConfigError, match="toolchain.format must name no target"):
+        KitConfig.from_dict(bad)
+
+
+@pytest.mark.parametrize("fmt", [
+    "ruff format",
+    "black",
+    "prettier --write",
+    "gofmt -w",
+    "gofmt -w -r",                            # -r takes a rewrite rule, not a target
+    "npx prettier --write",
+    "./scripts/fmt.sh",                       # one token: the executable itself
+    "prettier --config ./p.json --write",     # a path, but a flag's value
+    "poetry run black",
+])
+def test_format_command_without_a_target_is_accepted(fmt):
+    """The check is lexical and must not reject a legitimate prefix: a
+    single-token command is the executable, and a mid-command path is usually a
+    flag's value rather than a target."""
+    good = {**MINIMAL, "toolchain": {**MINIMAL["toolchain"], "format": fmt}}
+    assert KitConfig.from_dict(good).toolchain["format"] == fmt
+
+
 def test_default_tools_include_skill():
     """The handoff protocol depends on it: every role card ends with 'run /handoff',
     and a subagent without the Skill tool cannot invoke a slash skill at all."""

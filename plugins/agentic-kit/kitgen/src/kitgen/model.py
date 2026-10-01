@@ -16,6 +16,22 @@ class ConfigError(ValueError):
 
 _WILD = re.compile(r"[*?\[{]")
 
+# A whole-tree target in a formatter command. `post-edit-format.sh` appends the
+# edited file to `toolchain.format`, so a command that already names its own
+# target formats that target *as well as* the file -- `black .` becomes
+# `black . <file>`, rewriting every other role's files from a PostToolUse hook
+# that no ownership matcher sees.
+# `-a`/`-r`/`-R` are deliberately absent: they mean "recursive" in some tools
+# and take a value in others (`gofmt -r '<rewrite rule>'`), so rejecting them
+# would refuse legitimate commands. A path-shaped target is caught below instead.
+_TREE_TARGETS = frozenset({".", "./", "..", "../", "--all"})
+# Shape of a trailing argument that is a path or a glob rather than a flag.
+# Checked only on the final token, and only when the command has more than one:
+# a single-token command is the executable itself, and `./scripts/fmt.sh` is a
+# legitimate one. Mid-command path-shaped tokens are left alone because they are
+# usually a flag's value (`--config ./p.toml`), which is not a target.
+_PATH_SHAPED = re.compile(r"[/*?]|\.(py|pyi|ts|tsx|js|jsx|go|rs|rb|java|kt|css|scss)$")
+
 
 def _glob_prefix(pattern: str) -> str:
     """The literal *directory* prefix of a glob, used for overlap detection.
@@ -188,6 +204,22 @@ class KitConfig:
                     f"toolchain.{key} must be a non-empty command string; an empty "
                     f"value renders the permission rule 'Bash(:*)', whose meaning "
                     f"depends on how the host parses an empty prefix")
+
+        # `toolchain.format` is the one command the kit appends an argument to,
+        # so it must be a prefix that takes exactly one file. This is a lexical
+        # test only: §4.4 forbids the model from touching the project tree, so
+        # "is this token an existing path" is not a question it may ask.
+        fmt_tokens = self.toolchain["format"].split()
+        bad_token = next((t for t in fmt_tokens[1:] if t in _TREE_TARGETS), None)
+        if bad_token is None and len(fmt_tokens) > 1 and _PATH_SHAPED.search(fmt_tokens[-1]):
+            bad_token = fmt_tokens[-1]
+        if bad_token is not None:
+            raise ConfigError(
+                f"toolchain.format must name no target of its own, but carries "
+                f"{bad_token!r}: the post-edit hook appends the edited file, so "
+                f"this would run '{self.toolchain['format']} <file>' and reformat "
+                f"that target too -- every other role's files, from a hook no "
+                f"ownership matcher covers. Drop the target: 'black .' -> 'black'")
 
         if not isinstance(self.observability, bool):
             raise ConfigError(
