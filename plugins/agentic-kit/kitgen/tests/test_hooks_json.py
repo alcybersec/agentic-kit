@@ -39,3 +39,18 @@ def test_every_hook_script_sources_the_inertness_preamble():
         body = script.read_text()
         assert "lib/kitlock.sh" in body, script
         assert "kit_init" in body, script
+
+def test_plugin_declares_a_version():
+    """`claude plugin validate` warns without one, and /plugin update -- the whole
+    update model in design spec §4.1 -- has nothing to compare against."""
+    pj = json.loads((HOOKS.parent / ".claude-plugin/plugin.json").read_text())
+    assert pj["version"], pj
+    assert pj["version"].count(".") == 2, pj["version"]
+
+
+def test_no_unknown_hook_event_is_declared():
+    """`claude plugin validate` only WARNS on an unknown event ("entry ignored at
+    runtime"), so a typo there yields a hook that silently never fires. Pin the set."""
+    known = {"PreToolUse", "PostToolUse", "SubagentStop", "SessionStart",
+             "UserPromptSubmit", "Stop", "Notification", "PreCompact"}
+    assert set(load()) <= known, set(load()) - known

@@ -405,6 +405,27 @@ payload arrives as JSON on stdin (`.tool_name`, `.tool_input.command`, `.tool_in
 `{"hookSpecificOutput": {"permissionDecision": "deny"}, "systemMessage": "<reason>"}` on stderr,
 naming the rule and the allowed alternative.
 
+### 6.2a What `claude plugin validate` does and does not catch
+
+Established empirically by corrupting a copy of the plugin, because the answer decides which checks the
+test suite has to own:
+
+| Defect | Validator |
+|---|---|
+| `hooks.json` is invalid JSON | **fails** — *"At runtime this breaks the entire plugin load"* |
+| an unknown hook event name | **warns** — *"unknown hook event; entry ignored at runtime"* |
+| a `command` naming a script that does not exist | **passes silently** |
+| no `version` in `plugin.json` | warns |
+
+The third row is the dangerous one, and it is the same shape as the `agent_transcript_path` bug: a hook
+wired to a renamed or missing script never fires, every test that invokes the script directly still
+passes, and nothing complains. So `test_hooks_json.py` owns that check —
+`test_every_referenced_script_exists_and_is_executable` is load-bearing, not decorative. The event set
+is pinned for the same reason, since a typo there only warns.
+
+A clean `claude plugin validate` therefore means the manifest parses and the events are real. It does
+**not** mean the hooks fire. That needs a live session with the plugin installed, which is Task 17.
+
 ### 6.3 Forge neutrality (normative)
 
 No rule names a forge. `forge.kind` is an interview answer and the guard enforces the chosen one:

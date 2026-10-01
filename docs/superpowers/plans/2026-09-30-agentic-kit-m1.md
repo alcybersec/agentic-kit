@@ -5223,6 +5223,19 @@ git commit -m "feat(hooks): post-edit formatter and handoff-note stop check"
 
 ## Task 14: `hooks.json` wiring
 
+> **Amended after implementation.** `plugin.json` gained `version: 1.0.0` — without it
+> `claude plugin validate` warns and `/plugin update`, the whole update model in §4.1, has nothing to
+> compare against. Validation is now clean with no warnings.
+>
+> Two tests beyond the plan's four, both justified by §6.2a's empirical finding about the validator: it
+> **passes silently** when a `command` names a script that does not exist, and only **warns** on an
+> unknown event name. So the suite owns both checks — a hook wired to a renamed script never fires and
+> nothing else complains, which is the same shape as Task 13's `agent_transcript_path` bug.
+>
+> `MultiEdit` appears in the binary only as a legacy name in permission handling, with no tool
+> definition found, so `pre-file-guard`'s matcher lists the four tools §6.2 names and nothing more.
+> `role.md.j2`'s ownership-guard matcher still names it; a stale name in a matcher is inert.
+
 **Files:**
 - Create: `plugins/agentic-kit/hooks/hooks.json`
 - Test: `plugins/agentic-kit/kitgen/tests/test_hooks_json.py`
@@ -5271,6 +5284,21 @@ def test_every_hook_script_sources_the_inertness_preamble():
         body = script.read_text()
         assert "lib/kitlock.sh" in body, script
         assert "kit_init" in body, script
+
+def test_plugin_declares_a_version():
+    """`claude plugin validate` warns without one, and /plugin update -- the whole
+    update model in design spec §4.1 -- has nothing to compare against."""
+    pj = json.loads((HOOKS.parent / ".claude-plugin/plugin.json").read_text())
+    assert pj["version"], pj
+    assert pj["version"].count(".") == 2, pj["version"]
+
+
+def test_no_unknown_hook_event_is_declared():
+    """`claude plugin validate` only WARNS on an unknown event ("entry ignored at
+    runtime"), so a typo there yields a hook that silently never fires. Pin the set."""
+    known = {"PreToolUse", "PostToolUse", "SubagentStop", "SessionStart",
+             "UserPromptSubmit", "Stop", "Notification", "PreCompact"}
+    assert set(load()) <= known, set(load()) - known
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
