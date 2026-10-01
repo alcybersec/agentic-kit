@@ -284,3 +284,46 @@ def test_a_command_naming_a_real_secret_is_still_blocked(tmp_path, command):
     p = make_project(tmp_path, secrets=["./secrets/**"])
     r = run_hook(HOOK, bash_payload(command, p), p)
     assert r.returncode == 2, (command, r.stdout, r.stderr)
+
+
+# --- one matcher, shared with pre-file-guard (fix 1.3) -----------------------
+
+@pytest.mark.parametrize("command", [
+    "cat ./sub/../.env",
+    "cat sub/../.env",
+    "base64 .//.env",
+    "xxd ./.env",
+    "strings $PWD/.env",
+])
+def test_an_unnormalised_spelling_of_a_secret_is_blocked(tmp_path, command):
+    """The guard used to strip `./` and the project root by hand, normalising
+    neither `..` nor `//`, so these passed while the equivalent `Read` was denied.
+    `$PWD/.env` is here because the payload's cwd IS the project root in this
+    harness, so the shell would expand it to an absolute path inside the project."""
+    p = make_project(tmp_path, secrets=["./.env"])
+    cmd = command.replace("$PWD", str(p))
+    r = run_hook(HOOK, bash_payload(cmd, p), p)
+    assert r.returncode == 2, (cmd, r.stdout, r.stderr)
+    assert "secret path" in r.stderr
+
+
+def test_a_symlink_to_a_secret_is_blocked_by_its_target(tmp_path):
+    """kit_candidates adds the realpath spelling, which the hand-rolled matcher
+    had no way to see."""
+    p = make_project(tmp_path, secrets=["./.env"])
+    (p / ".env").write_text("TOKEN=x")
+    (p / "cfg").symlink_to(p / ".env")
+    r = run_hook(HOOK, bash_payload("base64 cfg", p), p)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "cat /etc/hostname",          # outside the project: not ours to police
+    "echo done",
+    "git log --oneline -5",
+    "rm -f build/out.o",
+])
+def test_the_shared_matcher_does_not_widen_the_block(tmp_path, command):
+    p = make_project(tmp_path, secrets=["./.env"])
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 0, (command, r.stderr)

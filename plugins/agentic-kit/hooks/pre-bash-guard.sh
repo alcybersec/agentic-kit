@@ -192,7 +192,8 @@ check_segment() {
 # the remediation the deny message recommends, so a template-to-secret `cp` is
 # exempted explicitly (it reads nothing secret).
 mapfile -t secrets < <(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
-root="${KIT_LOCK%/.claude/kit.lock.json}"
+patterns=$(printf '%s\n' ${secrets[@]+"${secrets[@]}"})
+cwd=$(kit_in '.cwd | strings')
 
 check_secrets() {
   [ "${#secrets[@]}" -gt 0 ] || return 0
@@ -201,34 +202,22 @@ check_secrets() {
   if [ "${w[0]##*/}" = "cp" ]; then
     local x
     for x in "${w[@]:1}"; do [[ "$x" == -* ]] || ops+=("$x"); done
-    if [ "${#ops[@]}" -eq 2 ]; then
-      case "${ops[0]}" in *.example|*.sample|*.template|*.dist) return 0 ;; esac
-    fi
+    if [ "${#ops[@]}" -eq 2 ] && kit_is_template "${ops[0]}"; then return 0; fi
   fi
-  local word tok pattern pat
+  local word
   while IFS= read -r word; do
-    tok="$word"
-    while :; do
-      case "$tok" in
-        ./*) tok="${tok#./}" ;;
-        "$root"/*) tok="${tok#"$root"/}" ;;
-        *) break ;;
-      esac
-    done
-    [ -n "$tok" ] || continue
-    # Same exemption as pre-file-guard: the template is what the deny message
-    # recommends. The `cp x.example y` special case above stays, because it has to
-    # judge the DESTINATION too.
-    kit_is_template "$tok" && continue
-    for pattern in "${secrets[@]}"; do
-      pat="${pattern#./}"
-      [ -n "$pat" ] || continue
-      # shellcheck disable=SC2254  # the pattern is a glob on purpose
-      case "$tok" in
-        $pat)
-          kit_deny "Blocked: this command names '${pattern}', a secret path in this project's kit lock. Never read, copy or print it; if you need its shape, read the .example template instead." ;;
-      esac
-    done
+    [ -n "$word" ] || continue
+    # ONE matcher for the whole kit. This used to strip `./` and the project root
+    # by hand, which normalised neither `..` nor `//`, so `cat ./sub/../.env` passed
+    # while `Read(./sub/../.env)` was blocked -- a third independent matcher with its
+    # own gaps. kit_candidates normalises lexically AND adds the realpath spelling,
+    # so a symlink is caught by name and by target; kit_drop_templates applies the
+    # same `*.example` exemption as pre-file-guard, per spelling.
+    kit_candidates "$word" "$cwd" || continue     # names nothing inside the project
+    kit_drop_templates || continue
+    if kit_match_glob "$patterns"; then
+      kit_deny "Blocked: this command names '${KIT_MATCHED}' (as ${KIT_MATCHED_REL}), a secret path in this project's kit lock. Never read, copy or print it; if you need its shape, read the committed .example template instead."
+    fi
   done < <(printf '%s\n' "$1" | tr -s ' \t\n"'"'"'()=,;|&<>`' '\n')
 }
 
