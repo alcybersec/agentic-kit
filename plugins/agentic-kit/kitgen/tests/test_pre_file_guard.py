@@ -121,7 +121,7 @@ def test_spaces_and_newlines_in_paths(tmp_path):
 def test_the_message_names_the_pattern_and_the_alternative(tmp_path):
     p = make_project(tmp_path, ["./secrets/**"])
     r = run_hook(HOOK, file_payload("Read", str(p / "secrets/x"), p), p)
-    msg = json.loads(r.stderr)["systemMessage"]
+    msg = r.stderr
     assert "./secrets/**" in msg and "secrets/x" in msg
     assert ".example" in msg
 

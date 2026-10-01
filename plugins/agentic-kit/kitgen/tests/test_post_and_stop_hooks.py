@@ -166,7 +166,7 @@ def test_stop_check_empty_or_missing_transcript_is_inert_or_blocks(tmp_path):
 
 def test_stop_check_deny_message_says_what_to_emit(tmp_path):
     p = make_project(tmp_path)
-    msg = json.loads(stop(p, [asst("done")]).stderr)["systemMessage"]
+    msg = stop(p, [asst("done")]).stderr
     for word in ("/handoff", "TASK", "COMPLETE", "OUTPUTS", "TESTS"):
         assert word in msg
 

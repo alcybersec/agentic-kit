@@ -106,9 +106,21 @@ kit_match_glob() {
   return 1
 }
 
-# kit_deny <reason> — block the tool call, per the Claude Code hook contract
+# kit_deny <reason> — block the tool call, per the Claude Code hook contract.
+#
+# The reason is PROSE on STDERR, and the exit code does the blocking.
+# Claude Code reads a hook's decision object from *stdout* ("your hook's stdout
+# must contain only the JSON object"), and when a PreToolUse hook exits 2 it
+# blocks the call and feeds the hook's *stderr* to the agent as the reason.
+# Writing the object to stderr therefore got the worst of both: the decision was
+# never read, so only `exit 2` blocked anything, and the remediation advice
+# reached the agent as a raw JSON blob instead of a sentence it could act on.
+#
+# Prose + exit 2 is preferred over the stdout object because there is no schema
+# to drift against: no `hookEventName` to omit, no per-event difference between
+# `permissionDecision` and a top-level `decision`. Nothing is printed to stdout,
+# because anything there would be parsed as a decision object.
 kit_deny() {
-  jq -nc --arg m "$1" \
-    '{hookSpecificOutput: {permissionDecision: "deny"}, systemMessage: $m}' >&2
+  printf '%s\n' "$1" >&2
   exit 2
 }

@@ -30,6 +30,7 @@ def main(argv: list[str]) -> int:
     a, b = plan.index(start), plan.index(end)
     sec = plan[a:b]
     changed = []
+    missed = []
 
     # "N:path" addresses the Nth fenced block positionally. Template blocks are
     # introduced by surrounding prose, so their first line is template content
@@ -41,7 +42,7 @@ def main(argv: list[str]) -> int:
         live = (ROOT / rel).read_text()
         found = [(t, f, l) for t, f, l in blocks(sec)]
         if idx >= len(found):
-            print(f"  WARNING: {start[:-1]} has {len(found)} blocks, need index {idx}")
+            missed.append(f"{start[:-1]} has {len(found)} blocks, need index {idx}")
             continue
         body, fence, lang = found[idx]
         if body != live:
@@ -65,12 +66,19 @@ def main(argv: list[str]) -> int:
                 changed.append(f"{rel}: {len(lines)} -> {len(new.splitlines())} lines")
             break
         else:
-            print(f"  WARNING: no block in {start[:-1]} opens with a path comment for {rel}")
+            missed.append(f"no block in {start[:-1]} opens with a path comment "
+                          f"for {rel} -- a template block has no path comment to "
+                          f"match, so address it positionally as N:{rel}")
     PLAN.write_text(plan[:a] + sec + plan[b:])
     for c in changed:
         print(f"  resynced {c}")
+    for m in missed:
+        print(f"  WARNING: {m}")
     print(f"{len(changed)} block(s) updated")
-    return 0
+    # A spec that matched nothing exits non-zero. It used to warn and return 0,
+    # so a mis-addressed template looked like "already in sync" and the drift was
+    # only caught by check_plan_sync.py on a later run.
+    return 1 if missed else 0
 
 
 if __name__ == "__main__":

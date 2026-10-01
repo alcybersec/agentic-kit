@@ -85,9 +85,11 @@ kit_match_glob() {
   return 1
 }
 
+# Prose on stderr, and `exit 2` does the blocking: Claude Code reads a decision
+# object from stdout, not stderr, so an object written here was never read and
+# the message reached the agent as a raw JSON blob. See hooks/lib/kitlock.sh.
 deny() {
-  jq -nc --arg m "$1" \
-    '{hookSpecificOutput: {permissionDecision: "deny"}, systemMessage: $m}' >&2
+  printf '%s\n' "$1" >&2
   exit 2
 }
 
