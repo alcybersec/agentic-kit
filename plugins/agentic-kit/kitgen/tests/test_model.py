@@ -121,3 +121,39 @@ def test_glob_prefix_truncates_to_a_whole_segment():
     assert not _overlaps("src/foo/**", "src/foobar/**")
     assert not _overlaps("services/api/**", "services/ui/**")
     assert _overlaps("**/*.py", "totally/unrelated/**")
+
+
+def test_unknown_role_key_is_rejected():
+    bad = {**MINIMAL, "roles": [
+        {**MINIMAL["roles"][0], "handoff_extras": ["MIGRATION:"]},
+        MINIMAL["roles"][1],
+    ]}
+    with pytest.raises(ConfigError, match="unknown keys"):
+        KitConfig.from_dict(bad)
+
+
+def test_scalar_where_a_mapping_belongs_is_a_config_error():
+    with pytest.raises(ConfigError, match="spine must be a mapping"):
+        KitConfig.from_dict({**MINIMAL, "spine": "docs/strategy.md"})
+
+
+def test_scalar_where_a_list_belongs_is_a_config_error():
+    with pytest.raises(ConfigError, match="floors must be a list"):
+        KitConfig.from_dict({**MINIMAL, "floors": "one floor"})
+
+
+def test_non_normalised_owns_glob_is_rejected():
+    for glob in ("./src/**", "src//core/**", "src/../lib/**"):
+        bad = {**MINIMAL, "roles": [
+            {**MINIMAL["roles"][0], "owns": [glob]},
+            MINIMAL["roles"][1],
+        ]}
+        with pytest.raises(ConfigError, match="not normalised"):
+            KitConfig.from_dict(bad)
+
+
+def test_nested_profile_structures_are_not_aliased():
+    profile = {**MINIMAL, "spine": {**MINIMAL["spine"], "inherited": ["docs/PRD.md"]}}
+    cfg = KitConfig.from_dict(profile)
+    assert cfg.spine["inherited"] is not profile["spine"]["inherited"]
+    assert cfg.milestones["outline"] is not profile["milestones"]["outline"]

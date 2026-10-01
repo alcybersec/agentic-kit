@@ -1,6 +1,7 @@
 """Project profile model. Pure data plus validation; no filesystem access."""
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -39,11 +40,41 @@ def _overlaps(a: str, b: str) -> bool:
     treated as overlapping everything, which means a profile containing one can
     never validate: extension-partitioned ownership of a shared tree
     (`app/**/*.py` vs `app/**/*.tsx`) is rejected by design.
+
+    Detection also assumes normalised, repository-root-relative globs (no
+    leading `./`, no `//`, no `../`); `KitConfig.validate()` enforces this
+    before it calls here.
     """
     pa, pb = _glob_prefix(a), _glob_prefix(b)
     if not pa or not pb:
         return True
     return pa == pb or pa.startswith(pb + "/") or pb.startswith(pa + "/")
+
+
+_ROLE_KEYS = {"name", "description", "owns", "handoff_extra", "tools", "veto"}
+_MAPPING_SECTIONS = ("attribution", "spine", "milestones", "test_tiers",
+                     "toolchain")
+_LIST_SECTIONS = ("load_order", "roles", "floors", "secrets")
+
+
+def _check_shapes(d: dict[str, Any]) -> None:
+    """Reject a scalar where a mapping or list belongs, before any copying."""
+    for section in _MAPPING_SECTIONS:
+        if not isinstance(d[section], dict):
+            raise ConfigError(
+                f"{section} must be a mapping, got {type(d[section]).__name__}")
+    for section in _LIST_SECTIONS:
+        if not isinstance(d[section], list):
+            raise ConfigError(
+                f"{section} must be a list, got {type(d[section]).__name__}")
+    for r in d["roles"]:
+        if not isinstance(r, dict):
+            raise ConfigError(f"each role must be a mapping, got {type(r).__name__}")
+        unknown = set(r) - _ROLE_KEYS
+        if unknown:
+            raise ConfigError(
+                f"role {r.get('name', '<unnamed>')!r} has unknown keys: "
+                f"{sorted(unknown)}")
 
 
 @dataclass(frozen=True)
@@ -99,6 +130,7 @@ class KitConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> KitConfig:
+        _check_shapes(d)
         roles = [
             Role(
                 name=r["name"],
@@ -115,10 +147,10 @@ class KitConfig:
             rendered_on=d["rendered_on"],
             project=Project(**d["project"]),
             forge=Forge(**d["forge"]),
-            attribution=dict(d["attribution"]),
-            spine=dict(d["spine"]),
-            load_order=[dict(e) for e in d["load_order"]],
-            milestones=dict(d["milestones"]),
+            attribution=copy.deepcopy(d["attribution"]),
+            spine=copy.deepcopy(d["spine"]),
+            load_order=copy.deepcopy(d["load_order"]),
+            milestones=copy.deepcopy(d["milestones"]),
             roles=roles,
             floors=list(d["floors"]),
             test_tiers=dict(d["test_tiers"]),
@@ -147,6 +179,16 @@ class KitConfig:
             raise ConfigError(
                 f"observability must be a boolean, got "
                 f"{type(self.observability).__name__} {self.observability!r}")
+
+        for role in self.roles:
+            for glob in role.owns:
+                if glob.startswith("./") or "//" in glob or "../" in glob:
+                    raise ConfigError(
+                        f"role {role.name!r} owns glob {glob!r} is not normalised: "
+                        f"write it relative to the repository root with no './', "
+                        f"'//' or '../'. Overlap is decided on literal path "
+                        f"prefixes, so a non-normalised glob would not be "
+                        f"detected as overlapping an equivalent one.")
 
         names = [r.name for r in self.roles]
         dupes = {n for n in names if names.count(n) > 1}
