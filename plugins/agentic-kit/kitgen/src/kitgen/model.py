@@ -71,6 +71,8 @@ _ROLE_KEYS = {"name", "description", "owns", "handoff_extra", "tools", "veto"}
 _MAPPING_SECTIONS = ("attribution", "spine", "milestones", "test_tiers",
                      "toolchain")
 _LIST_SECTIONS = ("load_order", "roles", "floors", "secrets")
+# Optional, so it is shape-checked only when present.
+_OPTIONAL_LIST_SECTIONS = ("critical",)
 
 
 def _check_shapes(d: dict[str, Any]) -> None:
@@ -81,6 +83,10 @@ def _check_shapes(d: dict[str, Any]) -> None:
                 f"{section} must be a mapping, got {type(d[section]).__name__}")
     for section in _LIST_SECTIONS:
         if not isinstance(d[section], list):
+            raise ConfigError(
+                f"{section} must be a list, got {type(d[section]).__name__}")
+    for section in _OPTIONAL_LIST_SECTIONS:
+        if section in d and not isinstance(d[section], list):
             raise ConfigError(
                 f"{section} must be a list, got {type(d[section]).__name__}")
     for r in d["roles"]:
@@ -136,6 +142,15 @@ class KitConfig:
     toolchain: dict[str, str]
     secrets: list[str]
     observability: bool
+    # Paths the veto role holds outright, wherever they sit in the ownership map.
+    #
+    # Ownership is directory-granular (§6.4): a kill switch, a permission table or a
+    # migration guard lives with the code that reads it, so the role that must guard
+    # it cannot own the directory, and claiming the file alone is an overlap. This is
+    # the narrow exception rather than a precedence engine — every role is refused
+    # these paths, including the one that owns the surrounding tree, and the veto role
+    # is allowed them even where another role owns everything around them.
+    critical: list[str] = field(default_factory=list)
 
     @property
     def veto_role(self) -> Role:
@@ -173,6 +188,7 @@ class KitConfig:
             toolchain=dict(d["toolchain"]),
             secrets=list(d["secrets"]),
             observability=d["observability"],
+            critical=list(d.get("critical", [])),
         )
         cfg.validate()
         return cfg
@@ -273,6 +289,27 @@ class KitConfig:
                     f"match it root-anchored against the whole path while "
                     f"settings.json hands it to Claude Code's own path matching, and "
                     f"the two only agree on the './' form.")
+
+        # `critical` reaches the same matcher as `owns`, so it carries the same
+        # normalisation rule — which also rules out a leading './', because '.' is a
+        # rejected segment. One rule, one spelling, one matcher.
+        for pattern in self.critical:
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ConfigError(
+                    f"critical entries must be non-empty strings, got {pattern!r}")
+            bad = None
+            if pattern.startswith("/"):
+                bad = "it is absolute"
+            elif "\\" in pattern:
+                bad = "it uses a backslash separator"
+            elif any(seg in ("", ".", "..") for seg in pattern.split("/")):
+                bad = "it has an empty, '.' or '..' segment"
+            if bad:
+                raise ConfigError(
+                    f"critical path {pattern!r} is not normalised: {bad}. Write it "
+                    f"relative to the repository root using forward slashes, the same "
+                    f"way as an `owns` glob — the ownership guard matches both with the "
+                    f"same code.")
 
         names = [r.name for r in self.roles]
         dupes = {n for n in names if names.count(n) > 1}

@@ -48,7 +48,7 @@ Then ground the user in one short message: current milestone, next task ID, any 
 - **Test tiers.** {% for tier, pct in cfg.test_tiers.items() %}{{ tier }} ≥ {{ pct }}%{{ ", " if not loop.last }}{% endfor %}.
 {% if cfg.observability %}
 - **Observability with the feature.** Every stage lands with counters, latency metrics and
-  structured logs, not as a follow-up.
+  structured logs, not as a follow-up, in paths your own role holds. A shared registry is a contract.
 {% endif %}
 - **Secrets.** Never read or print {% for s in cfg.secrets %}`{{ s }}`{{ ", " if not loop.last }}{% endfor %}.
 

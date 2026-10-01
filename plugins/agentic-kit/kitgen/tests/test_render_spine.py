@@ -76,3 +76,23 @@ def test_adr_0001_records_the_install(load_fixture):
 def test_contracts_is_empty_but_structured(load_fixture):
     body = render(load_fixture("greenfield_prd"))["docs/CONTRACTS.md"]
     assert "## Change log" in body
+
+
+def test_the_observability_rule_is_scoped_to_a_roles_own_paths(load_fixture):
+    """Read as "every role instruments the shared observability module", the rule is
+    unsatisfiable for any role that does not own that module — most of them on a real
+    roster. The remedy is contract-first, not an ownership exemption."""
+    cfg = load_fixture("services_layout")
+    assert cfg.observability
+    man = render(cfg)
+    strategy = man[cfg.spine["strategy"]]
+    assert "in paths that task's own role holds per §2" in strategy
+    assert cfg.spine["contracts"] in strategy
+    assert "in paths your own role holds" in man["CLAUDE.md"]
+
+
+def test_the_observability_text_is_absent_when_the_flag_is_false(load_variant):
+    cfg = load_variant("services_layout", observability=False)
+    man = render(cfg)
+    assert "Not applicable for this project." in man[cfg.spine["strategy"]]
+    assert "Observability with the feature" not in man["CLAUDE.md"]

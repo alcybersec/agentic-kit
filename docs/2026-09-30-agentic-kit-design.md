@@ -161,6 +161,7 @@ toolchain:
   types: "mypy"
 secrets: ["./.env", "./secrets/**", "./config/profile.yaml"]
 observability: true                # when true, the "ships with the feature" rule and handoff line apply
+critical: []                       # optional: paths only the veto role may change, whoever owns them
 ```
 
 ### 5.1 The generated lock sidecar
@@ -215,6 +216,11 @@ observability: true                # when true, the "ships with the feature" rul
   secret that can appear at more than one depth. As with `owns`, matching is case-sensitive: on a
   case-insensitive volume `.ENV` reaches a file that `./.env` names, and the kit does not pretend
   otherwise (§5.2).
+- The observability rule binds a role **within the paths it owns** (clarified 2026-10-02, decision 1).
+  Read as "every role instruments the shared observability module", it is unsatisfiable for any role
+  that does not own that module — on a real roster, most of them. A shared metric registry or log
+  schema is an interface, so it is a `CONTRACTS.md` entry and contract-first already covers it: the
+  owning role adds the field on request.
 - `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
   coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
 - Ownership globs MUST be **normalised**: repository-root-relative, forward-slashed, with no leading
@@ -233,6 +239,11 @@ observability: true                # when true, the "ships with the feature" rul
 - Role entries MUST carry no unknown keys. A misspelled `handoff_extra` would otherwise load as an
   empty list, and §9.1's per-role handoff check passes vacuously on an empty list — so the role card
   would render with no handoff lines and nothing downstream would notice.
+- `critical` is **optional** and defaults to empty. Each entry carries the same normalisation rule as
+  an `owns` glob — which also rules out a leading `./`, since `.` is a rejected segment — because the
+  ownership guard matches both with the same code. A `critical` path deliberately **may** sit inside
+  another role's owned tree: it is not ownership, it is a refusal that outranks ownership, so the
+  overlap check does not apply to it.
 - Ownership globs MUST be directory-rooted. Overlap is decided on literal directory prefixes, so a
   glob whose first segment is wild has no prefix and is treated as overlapping everything: that makes
   extension-partitioned ownership of a shared tree (`app/**/*.py` vs `app/**/*.tsx`) invalid by
@@ -531,6 +542,19 @@ implementing role to record a contract before building against it.
 A project-wide `Edit` deny in `settings.json` is the wrong instrument for this, because the
 Orchestrator legitimately writes the dispatch state, the register and the §11 expansions. Only a
 role-scoped guard can distinguish them.
+
+**Critical paths** (added 2026-10-02, decision 1). Ownership is directory-granular: a kill switch, a
+permission table or a migration guard lives with the code that reads it, so the role that must guard it
+cannot own the directory, and claiming the single file is an ownership overlap. `critical: [paths]` in
+the profile resolves this narrowly — every role is refused those paths, **including the one that owns
+the surrounding tree**, and the veto role is allowed them **even though it owns nothing around them**.
+Checked before the ownership map in both directions.
+
+This was chosen over general more-specific-wins precedence, which would have meant reworking
+`_overlaps`, the guard's match loop (it refuses on the first other-role match; ranking would require
+collecting every match and ordering by prefix length) and `verify._covers`. The failure mode of a
+precedence bug is *silently widening* access, which is the one thing this guard exists to prevent, and
+one file does not justify that risk. If a second use case appears, revisit.
 
 **Who may author an ADR.** `architect` owns `docs/adr/**` in every generated roster, so no other role
 can file one — including the veto role, whose own §6 requires an ADR to weaken a floor. `/new-adr` is

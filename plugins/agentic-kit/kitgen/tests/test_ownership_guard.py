@@ -219,3 +219,66 @@ def test_inlined_matcher_is_identical_to_the_plugin_library(load_fixture):
 
     for name in ("kit_lexnorm", "kit_candidates", "kit_match_glob"):
         assert fn(body, name) == fn(lib, name), name
+
+
+# --- critical paths: the veto role holds them outright ------------------------
+
+CRITICAL = ["src/ledger/api/kill_switch.py", "src/ledger/models/permissions.py"]
+
+
+def _install_critical(tmp_path, load_variant):
+    """python_monolith with two critical files, one inside `backend`'s tree and one
+    inside `data`'s — the case the feature exists for."""
+    cfg = load_variant("python_monolith", critical=CRITICAL)
+    return _install(tmp_path, cfg), cfg
+
+
+@pytest.mark.parametrize("rel", CRITICAL)
+@pytest.mark.parametrize("role", ["backend", "data", "architect", "qa", "devops"])
+def test_a_critical_path_is_refused_to_every_non_veto_role(tmp_path, load_variant,
+                                                           role, rel):
+    """Including the role that owns the directory around it: `backend` owns
+    `src/ledger/api/**` and still may not touch the kill switch."""
+    script, cfg = _install_critical(tmp_path, load_variant)
+    r = _run(script, tmp_path, role, rel)
+    assert r.returncode == 2, (role, rel, r.stdout, r.stderr)
+    assert "critical path" in r.stderr
+    assert cfg.veto_role.name in r.stderr, "the message must name who can change it"
+
+
+@pytest.mark.parametrize("rel", CRITICAL)
+def test_the_veto_role_may_write_a_critical_path_it_does_not_own(tmp_path,
+                                                                load_variant, rel):
+    """The other half, and the whole point: `safety` owns neither directory."""
+    script, cfg = _install_critical(tmp_path, load_variant)
+    assert not any(rel.startswith(g.rstrip("*").rstrip("/") + "/")
+                   for g in cfg.veto_role.owns), "safety must not own it, or this proves nothing"
+    r = _run(script, tmp_path, cfg.veto_role.name, rel)
+    assert r.returncode == 0, (rel, r.stderr)
+
+
+def test_a_critical_glob_covers_a_subtree(tmp_path, load_variant):
+    cfg = load_variant("python_monolith", critical=["src/ledger/api/admin/**"])
+    script = _install(tmp_path, cfg)
+    assert _run(script, tmp_path, "backend", "src/ledger/api/admin/users.py").returncode == 2
+    assert _run(script, tmp_path, "safety", "src/ledger/api/admin/users.py").returncode == 0
+    # A sibling inside the same owned tree is unaffected.
+    assert _run(script, tmp_path, "backend", "src/ledger/api/routes.py").returncode == 0
+
+
+def test_neighbouring_files_are_untouched_by_a_critical_entry(tmp_path, load_variant):
+    """The feature must not quietly widen: only the named paths change hands."""
+    script, cfg = _install_critical(tmp_path, load_variant)
+    assert _run(script, tmp_path, "backend", "src/ledger/api/routes.py").returncode == 0
+    assert _run(script, tmp_path, "data", "src/ledger/models/entry.py").returncode == 0
+    # And safety gains nothing else in those trees.
+    assert _run(script, tmp_path, "safety", "src/ledger/api/routes.py").returncode == 2
+
+
+def test_no_critical_list_changes_nothing(tmp_path, load_fixture):
+    """Absent by default, and absent must mean inert."""
+    cfg = load_fixture("python_monolith")
+    assert cfg.critical == []
+    script = _install(tmp_path, cfg)
+    assert _run(script, tmp_path, "backend", "src/ledger/api/routes.py").returncode == 0
+    assert _run(script, tmp_path, "safety", "src/ledger/api/routes.py").returncode == 2

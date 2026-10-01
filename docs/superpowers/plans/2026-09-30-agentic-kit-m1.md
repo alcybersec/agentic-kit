@@ -965,7 +965,7 @@ Then ground the user in one short message: current milestone, next task ID, any 
 - **Test tiers.** {% for tier, pct in cfg.test_tiers.items() %}{{ tier }} ≥ {{ pct }}%{{ ", " if not loop.last }}{% endfor %}.
 {% if cfg.observability %}
 - **Observability with the feature.** Every stage lands with counters, latency metrics and
-  structured logs, not as a follow-up.
+  structured logs, not as a follow-up, in paths your own role holds. A shared registry is a contract.
 {% endif %}
 - **Secrets.** Never read or print {% for s in cfg.secrets %}`{{ s }}`{{ ", " if not loop.last }}{% endfor %}.
 
@@ -1838,7 +1838,9 @@ Floors are append-only. Removing or weakening one requires an ADR and the user's
 
 {% if cfg.observability %}
 Every stage lands with counters, latency metrics and structured logs in the same task that
-implements it — never as a follow-up.
+implements it — never as a follow-up — in paths that task's own role holds per §2. A shared metric
+registry or log schema is an interface: record it in `{{ cfg.spine.contracts }}` and ask its owner for
+the field, rather than reaching into their tree.
 {% else %}
 Not applicable for this project.
 {% endif %}
@@ -4761,6 +4763,8 @@ path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty | strings' 2
 [ -n "$path" ] || exit 0
 kit_candidates "$path" "$(printf '%s' "$input" | jq -r '.cwd // empty | strings' 2>/dev/null)" || exit 0
 
+critical=$(jq -r '.critical[]? | strings' "$KIT_LOCK" 2>/dev/null)
+veto=$(jq -r '.roles[]? | select(.veto == true) | .name | strings' "$KIT_LOCK" 2>/dev/null)
 mine=$(jq -r --arg r "$role" '.roles[]? | select(.name==$r) | .owns[]? | strings' "$KIT_LOCK" 2>/dev/null)
 others=$(jq -r --arg r "$role" '.roles[]? | select(.name!=$r) | .name as $n | .owns[]? | strings | "\($n)|\(.)"' "$KIT_LOCK" 2>/dev/null)
 all_cands=("${KIT_CANDS[@]}")
@@ -4772,6 +4776,19 @@ for rel in "${all_cands[@]}"; do
 
   # This role's own memory is writable.
   case "$rel" in ".claude/agent-memory/$role/"*) continue ;; esac
+
+  # Critical paths: the veto role holds these outright, wherever they sit in the
+  # ownership map. Ownership is directory-granular, so a kill switch or a permission
+  # table lives with the code that reads it and the role that must guard it cannot own
+  # the directory. Checked BEFORE ownership in both directions: every other role is
+  # refused even when it owns the surrounding tree, and the veto role is allowed even
+  # though it does not.
+  if [ -n "$critical" ] && kit_match_glob "$critical"; then
+    if [ -n "$veto" ] && [ "$role" = "$veto" ]; then
+      continue
+    fi
+    deny "Blocked: ${rel} is a critical path (matched '${KIT_MATCHED}' in the profile's \`critical\` list). Only \`${veto}\` may change it, whoever owns the directory around it. Put the change you need in your handoff note and ask the Orchestrator to route it to ${veto}."
+  fi
 
   # Refused for every role, whatever the ownership map says.
   case "$rel" in

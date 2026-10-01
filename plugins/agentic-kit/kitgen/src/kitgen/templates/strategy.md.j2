@@ -60,7 +60,9 @@ Floors are append-only. Removing or weakening one requires an ADR and the user's
 
 {% if cfg.observability %}
 Every stage lands with counters, latency metrics and structured logs in the same task that
-implements it — never as a follow-up.
+implements it — never as a follow-up — in paths that task's own role holds per §2. A shared metric
+registry or log schema is an interface: record it in `{{ cfg.spine.contracts }}` and ask its owner for
+the field, rather than reaching into their tree.
 {% else %}
 Not applicable for this project.
 {% endif %}

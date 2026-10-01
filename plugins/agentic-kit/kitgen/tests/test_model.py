@@ -482,3 +482,49 @@ def test_an_ordinary_overlap_does_not_get_the_wildcard_explanation():
         KitConfig.from_dict(bad)
     assert "wildcard segment" not in str(e.value)
     assert "ownership overlap: architect:src/a/** and safety:src/a/b/**" in str(e.value)
+
+
+# --- critical paths -----------------------------------------------------------
+
+def test_critical_defaults_to_empty_and_is_optional():
+    """Most projects need none, so absence must be valid rather than `critical: []`
+    boilerplate in every profile — the same treatment as a role's `handoff_extra`."""
+    assert KitConfig.from_dict(MINIMAL).critical == []
+
+
+def test_critical_reaches_the_lock():
+    cfg = KitConfig.from_dict({**MINIMAL, "critical": ["src/kill_switch.py"]})
+    assert cfg.to_lock()["critical"] == ["src/kill_switch.py"]
+
+
+@pytest.mark.parametrize("pattern,why", [
+    ("/abs/kill.py", "absolute"),
+    ("./src/kill.py", "a leading './' is a '.' segment"),
+    ("src/../kill.py", "'..' segment"),
+    ("src//kill.py", "empty segment"),
+    ("src\\kill.py", "backslash"),
+])
+def test_a_non_normalised_critical_path_is_rejected(pattern, why):
+    """Same rule as `owns`, because the guard matches them with the same code."""
+    with pytest.raises(ConfigError, match="critical path .* is not normalised"):
+        KitConfig.from_dict({**MINIMAL, "critical": [pattern]})
+
+
+@pytest.mark.parametrize("pattern", ["", "   ", 7, None])
+def test_an_empty_or_non_string_critical_entry_is_rejected(pattern):
+    with pytest.raises(ConfigError, match="critical entries must be non-empty strings"):
+        KitConfig.from_dict({**MINIMAL, "critical": [pattern]})
+
+
+@pytest.mark.parametrize("wrong", ["a string", 3, {"a": "map"}])
+def test_critical_given_a_non_list_is_rejected(wrong):
+    with pytest.raises(ConfigError, match="critical must be a list"):
+        KitConfig.from_dict({**MINIMAL, "critical": wrong})
+
+
+def test_a_critical_path_may_sit_inside_another_roles_tree():
+    """The reason it exists: this is an ownership overlap that must NOT be rejected,
+    because `critical` is not ownership — it is a refusal that outranks it."""
+    cfg = KitConfig.from_dict({**MINIMAL, "critical": ["docs/adr/0001-frozen.md"]})
+    assert "docs/adr/**" in cfg.roles[0].owns
+    assert cfg.critical == ["docs/adr/0001-frozen.md"]
