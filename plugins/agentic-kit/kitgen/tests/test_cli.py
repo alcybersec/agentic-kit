@@ -140,12 +140,14 @@ def test_lock_is_written_after_kit_yaml(tmp_path, capsys):
 
 def test_hook_scripts_are_executable(tmp_path, capsys):
     """Every manifest path under .claude/hooks/ must be executable once written.
-    VACUOUS today: render() emits no hook yet (Task 12b adds ownership-guard.sh),
-    so this asserts over an empty set. It becomes meaningful when 12b lands."""
+    Non-vacuous since Task 12b: ownership-guard.sh is in the manifest, and the
+    assert below pins that so this can never silently go back to an empty set."""
     _seed_spine(tmp_path)
     assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
     written = json.loads(capsys.readouterr().out)["written"]
-    for rel in (p for p in written if p.startswith(".claude/hooks/")):
+    hooks = [p for p in written if p.startswith(".claude/hooks/")]
+    assert ".claude/hooks/ownership-guard.sh" in hooks
+    for rel in hooks:
         assert os.access(tmp_path / rel, os.X_OK), rel
 
 

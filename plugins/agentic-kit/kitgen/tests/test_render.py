@@ -21,6 +21,7 @@ def expected_paths(cfg):
         "docs/risk-register.md",
         "docs/CONTRACTS.md",
         "docs/adr/0001-adopt-agentic-kit.md",
+        ".claude/hooks/ownership-guard.sh",
     }
     for r in cfg.roles:
         paths.add(f".claude/agents/{r.name}.md")
@@ -178,7 +179,7 @@ def test_render_module_contract():
     skill, so pin them here. The plan's Task 4 block once declared GENERATE_ONCE while
     the committed module lacked it, which nothing caught."""
     from kitgen.render import GENERATE_ONCE, SINGLETONS
-    assert len(SINGLETONS) == 10, sorted(SINGLETONS)
+    assert len(SINGLETONS) == 11, sorted(SINGLETONS)
     assert GENERATE_ONCE == {
         "docs/plan/README.md",
         "docs/adr/0001-adopt-agentic-kit.md",

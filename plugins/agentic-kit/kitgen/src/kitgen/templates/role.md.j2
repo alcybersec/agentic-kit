@@ -4,6 +4,12 @@ description: {{ role.description }}
 tools: {{ role.tools | join(', ') }}
 model: inherit
 memory: project
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|NotebookEdit|MultiEdit"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ownership-guard.sh" {{ role.name }}
 ---
 
 You are the **{{ role.name }}** engineer for {{ project.name }}.
