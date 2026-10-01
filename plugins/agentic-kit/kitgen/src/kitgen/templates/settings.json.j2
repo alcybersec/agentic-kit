@@ -17,7 +17,8 @@
       "Bash(git log:*)",
       "Bash(git commit --only:*)",
       "Bash(git switch:*)",
-      "Bash(git worktree:*)",
+      "Bash(git worktree add:*)",
+      "Bash(git worktree list:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(sed -n:*)"
@@ -29,21 +30,29 @@
 {% for s in cfg.secrets %}
       "Read({{ s }})",
       "Edit({{ s }})",
-      "Write({{ s }})",
 {% endfor %}
       "Edit(./.claude/settings.json)",
-      "Write(./.claude/settings.json)",
       "Edit(./.claude/kit.lock.json)",
-      "Write(./.claude/kit.lock.json)",
       "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git reset --hard:*)",
       "Bash(git add -A:*)",
       "Bash(git add .:*)",
       "Bash(git commit -a:*)",
+      "Bash(git commit -am:*)",
+      "Bash(git commit --all:*)",
+      "Bash(git add --all:*)",
+      "Bash(git add -u:*)",
       "Bash(git stash:*)",
       "Bash(docker compose down -v:*)",
+      "Bash(docker compose down --volumes:*)",
+      "Bash(docker-compose down -v:*)",
+      "Bash(git checkout -- .:*)",
+      "Bash(git checkout .:*)",
+      "Bash(git restore .:*)",
+      "Bash(git clean:*)",
       "Agent(orchestrator)"
 {% if forge.exclusive and forge.kind == 'gitlab' %}
       ,"Bash(gh:*)"
