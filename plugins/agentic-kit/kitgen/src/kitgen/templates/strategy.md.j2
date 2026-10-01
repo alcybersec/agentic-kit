@@ -103,7 +103,7 @@ to `open`. §10 Status is derived from `{{ cfg.spine.plan }}`, which is authorit
 - [ ] Every role named in the M0 table below has a test path it owns in §2, or test paths are left
   unowned. If every test path belongs to one role, decide with the user who owns what before
   dispatching — the ownership guard blocks a role from writing another's tree, so an unowned decision
-  here stalls three of the four M0 tasks.
+  here stalls every M0 task that has to write a test.
 {% if forge.kind != 'none' %}
 - [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
 {% endif %}
