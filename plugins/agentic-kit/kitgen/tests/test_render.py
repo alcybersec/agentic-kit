@@ -178,10 +178,29 @@ def test_render_module_contract():
     """SINGLETONS and GENERATE_ONCE are referenced by the CLI and by M2's upgrade
     skill, so pin them here. The plan's Task 4 block once declared GENERATE_ONCE while
     the committed module lacked it, which nothing caught."""
-    from kitgen.render import GENERATE_ONCE, SINGLETONS
+    from kitgen.render import GENERATE_ONCE, LIVING, SINGLETONS, is_preserved
     assert len(SINGLETONS) == 11, sorted(SINGLETONS)
     assert GENERATE_ONCE == {
         "docs/plan/README.md",
         "docs/adr/0001-adopt-agentic-kit.md",
     }
     assert GENERATE_ONCE <= set(SINGLETONS.values())
+    # §7.1a's living set, in full. A document missing from here is one `--force`
+    # silently empties, so the omission has to be a visible edit to this list.
+    assert LIVING == {
+        "docs/strategy.md",
+        "docs/design.md",
+        "docs/decisions.md",
+        "docs/CONTRACTS.md",
+        "docs/risk-register.md",
+    }
+    assert LIVING <= set(SINGLETONS.values())
+    assert not (LIVING & GENERATE_ONCE)
+    assert all(is_preserved(p) for p in LIVING | GENERATE_ONCE)
+    assert is_preserved(".claude/agent-memory/backend/MEMORY.md")
+    assert is_preserved(".claude/agent-memory/a-role-not-in-this-profile/MEMORY.md")
+    # Scaffolding: these MUST be re-rendered, or a profile change never lands.
+    for p in ("CLAUDE.md", ".claude/settings.json", ".claude/agents/orchestrator.md",
+              ".claude/agents/backend.md", ".claude/hooks/ownership-guard.sh",
+              ".claude/kit.yaml", ".claude/kit.lock.json"):
+        assert not is_preserved(p), p

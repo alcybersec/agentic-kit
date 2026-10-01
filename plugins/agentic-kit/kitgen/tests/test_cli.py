@@ -329,3 +329,82 @@ def test_write_failure_creating_a_parent_directory_exits_four(tmp_path, capsys):
     assert rc == 4
     assert "write failed at .claude/" in err
     assert "CLAUDE.md" in err
+
+
+# --- §7.1a: --force replaces scaffolding, it does not discard the project's work ---
+
+def _seed_living(root: Path) -> dict[str, str]:
+    """Put a distinctive sentence in every file `--force` must not clobber.
+
+    These are the files a project writes into: five living spine documents, two
+    generate-once files, and per-role memory. CLAUDE.md tells the user to
+    re-render after every plugin update, so this is the ordinary path, not a
+    corner case.
+    """
+    seeded = {
+        "docs/strategy.md": "M0-S1-BACK-004 hand-expanded at the gate",
+        "docs/design.md": "the ledger writes through a single append path",
+        "docs/decisions.md": "| 0002 | drop the cache layer | Accepted |",
+        "docs/CONTRACTS.md": "POST /entries -> 201 {id}",
+        "docs/risk-register.md": "| R-013 | peer edits during a sweep | high |",
+        "docs/plan/README.md": "dispatch state after task 4",
+        "docs/adr/0001-adopt-agentic-kit.md": "Accepted 2026-09-01, kit 1.0.0",
+        ".claude/agent-memory/backend/MEMORY.md": "- alembic autogenerate lies here",
+    }
+    for rel, text in seeded.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    return seeded
+
+
+def test_force_keeps_every_living_and_generate_once_file(tmp_path, capsys):
+    """The failure this pins was an amputation, not a diff: a re-render restored
+    the empty scaffold over five documents of accumulated project content, and
+    over every role's memory. The orphan state is the worst of it -- blanking
+    `decisions.md` leaves `docs/adr/0002-*.md` on disk with nothing pointing at
+    it, so the project reads as though the decision was never recorded."""
+    _seed_spine(tmp_path)
+    seeded = _seed_living(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--force"]) == 0
+    for rel, text in seeded.items():
+        assert (tmp_path / rel).read_text() == text, rel
+    err = capsys.readouterr().err
+    for rel in seeded:
+        assert rel in err, f"the skip must be named, not silent: {rel}"
+
+
+def test_force_does_overwrite_the_generated_scaffolding(tmp_path, capsys):
+    """The other half of the contract. Preserving too much is also a defect: a
+    profile change that never reaches CLAUDE.md, the role cards, settings or the
+    lock leaves the kit describing a project it no longer configures."""
+    _seed_spine(tmp_path)
+    scaffold = ["CLAUDE.md", ".claude/settings.json", ".claude/kit.lock.json",
+                ".claude/kit.yaml", ".claude/agents/orchestrator.md",
+                ".claude/hooks/ownership-guard.sh"]
+    for rel in scaffold:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("STALE")
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--force"]) == 0
+    for rel in scaffold:
+        assert (tmp_path / rel).read_text() != "STALE", rel
+    err = capsys.readouterr().err
+    for rel in scaffold:
+        assert rel in err, f"--force must name what it overwrote: {rel}"
+
+
+def test_dry_run_predicts_the_force_split(tmp_path, capsys):
+    """§7.1b: a preview that disagrees with the real run is worse than none."""
+    _seed_spine(tmp_path)
+    seeded = _seed_living(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("STALE")
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--dry-run", "--force"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["clashes"] == []
+    assert out["frozen"] == sorted(seeded)
+    assert out["overwrite"] == ["CLAUDE.md"]
+    for rel, text in seeded.items():
+        assert (tmp_path / rel).read_text() == text, rel
+    assert (tmp_path / "CLAUDE.md").read_text() == "STALE"

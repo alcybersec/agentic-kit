@@ -26,7 +26,7 @@ import yaml
 from jinja2 import UndefinedError
 
 from .model import KitConfig
-from .render import GENERATE_ONCE, render
+from .render import is_preserved, render
 from .verify import verify
 
 HOOKS_PREFIX = ".claude/hooks/"
@@ -96,27 +96,34 @@ def main(argv: list[str] | None = None) -> int:
     # Directories count as clashes too (.exists(), not .is_file()).
     clashes = sorted(p for p in manifest if (args.out / p).exists())
     frozen: list[str] = []
+    overwrite: list[str] = []
     if args.force:
-        # --force still must not clobber these. The plan file IS the dispatch state
-        # after the first task, and ADR 0001 stamps the install's date and kit
-        # version -- re-rendering it restamps an Accepted record with a later
-        # install's facts, falsifying the thing the ADR exists to preserve.
-        frozen = sorted(p for p in GENERATE_ONCE if p in clashes)
+        # --force still must not clobber a generate-once or living file: see
+        # render.is_preserved. What remains is scaffolding, and it is listed
+        # because "overwrite the generated files" is only reassuring when the
+        # caller can see which files those turned out to be.
+        frozen = sorted(p for p in clashes if is_preserved(p))
+        overwrite = sorted(p for p in clashes if not is_preserved(p))
         clashes = []
 
     if args.dry_run:
         print(json.dumps({"manifest": sorted(manifest),
                           "clashes": clashes,
-                          "frozen": frozen}, indent=2))
+                          "frozen": frozen,
+                          "overwrite": overwrite}, indent=2))
         return 3 if clashes else 0
 
     if clashes:
         print(f"refusing to overwrite: {clashes}", file=sys.stderr)
         return 3
     if frozen:
-        print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
+        print(f"keeping {len(frozen)} existing file(s) the project owns: {frozen}",
+              file=sys.stderr)
         for p in frozen:
             del manifest[p]
+    if overwrite:
+        print(f"overwriting {len(overwrite)} generated file(s): {overwrite}",
+              file=sys.stderr)
 
     # Manifest insertion order is the write order AND the order of the emitted
     # `written` list (tests assert on it): kit.yaml before kit.lock.json (spec 5.1

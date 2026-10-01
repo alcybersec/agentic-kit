@@ -40,6 +40,40 @@ GENERATE_ONCE = frozenset({
     "docs/adr/0001-adopt-agentic-kit.md",
 })
 
+# Living documents, §7.1a: the kit renders their headings and the project writes
+# everything underneath. Re-rendering one restores the empty scaffold, which is
+# not a diff to review but a deletion -- and worse than a deletion where an index
+# is involved: blanking `decisions.md` leaves `docs/adr/0002-*.md` on disk while
+# nothing points at it, so the project reads as though the decision was never
+# recorded. `strategy.md` is here for §11, whose task graph is hand-expanded at
+# every gate; §1-§10 are stable scaffolding, and reconciling the two halves is
+# what /kit-upgrade's diff is for (M2), not something a blind overwrite can do.
+LIVING = frozenset({
+    "docs/strategy.md",
+    "docs/design.md",
+    "docs/decisions.md",
+    "docs/CONTRACTS.md",
+    "docs/risk-register.md",
+})
+
+# Per-role agent memory. Matched by prefix rather than listed, because the roster
+# is per-profile: a literal set would miss the memory of any role not in the
+# profile being rendered, which is exactly the file a re-render is likeliest to
+# find on disk.
+MEMORY_PREFIX = ".claude/agent-memory/"
+
+
+def is_preserved(path: str) -> bool:
+    """True when an existing copy of `path` must survive `--force`.
+
+    `--force` means "replace the generated scaffolding", not "discard the work".
+    CLAUDE.md told the user to re-render after every plugin update, so this set
+    is the difference between an upgrade and a silent amputation of the project's
+    written record.
+    """
+    return (path in GENERATE_ONCE or path in LIVING
+            or path.startswith(MEMORY_PREFIX))
+
 
 def _env() -> Environment:
     return Environment(
