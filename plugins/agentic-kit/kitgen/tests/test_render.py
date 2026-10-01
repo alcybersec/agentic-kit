@@ -104,6 +104,23 @@ def test_not_exclusive_with_a_real_forge_omits_the_prohibition(load_variant):
     assert "Do not propose" not in body
 
 
+def test_every_rendered_markdown_is_well_formed(load_fixture):
+    """Generalises the CLAUDE.md checks to the whole manifest: a hard-wrapped table
+    row breaks its table, a heading needs a blank line under it, and three newlines
+    in a row means a template emitted a stray one."""
+    for name in FIXTURES:
+        for path, body in render(load_fixture(name)).items():
+            if not path.endswith(".md"):
+                continue
+            assert "\n\n\n" not in body, (name, path, "stray blank line")
+            lines = body.splitlines()
+            for i, line in enumerate(lines):
+                if line.startswith("|"):
+                    assert line.rstrip().endswith("|"), (name, path, i, line)
+                if line.startswith("#") and i + 1 < len(lines):
+                    assert lines[i + 1] == "", (name, path, i, "no blank line under heading")
+
+
 def test_claude_md_has_every_section(load_fixture):
     """The template was once committed truncated — a third of it missing, including
     the whole dispatch loop — and every string-presence test still passed. Assert the

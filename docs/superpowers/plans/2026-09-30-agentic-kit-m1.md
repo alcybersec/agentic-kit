@@ -753,6 +753,23 @@ def test_not_exclusive_with_a_real_forge_omits_the_prohibition(load_variant):
     assert "Do not propose" not in body
 
 
+def test_every_rendered_markdown_is_well_formed(load_fixture):
+    """Generalises the CLAUDE.md checks to the whole manifest: a hard-wrapped table
+    row breaks its table, a heading needs a blank line under it, and three newlines
+    in a row means a template emitted a stray one."""
+    for name in FIXTURES:
+        for path, body in render(load_fixture(name)).items():
+            if not path.endswith(".md"):
+                continue
+            assert "\n\n\n" not in body, (name, path, "stray blank line")
+            lines = body.splitlines()
+            for i, line in enumerate(lines):
+                if line.startswith("|"):
+                    assert line.rstrip().endswith("|"), (name, path, i, line)
+                if line.startswith("#") and i + 1 < len(lines):
+                    assert lines[i + 1] == "", (name, path, i, "no blank line under heading")
+
+
 def test_claude_md_has_every_section(load_fixture):
     """The template was once committed truncated — a third of it missing, including
     the whole dispatch loop — and every string-presence test still passed. Assert the
@@ -973,8 +990,8 @@ Then ground the user in one short message: current milestone, next task ID, any 
   confirmation.
 - **A local test run is not the pipeline.** After a push, read the pipeline result by **job name**,
   never by its colour: a `skipped` job behind a failed one is not a pass, it is a claim going stale.
-{% endif %}
 
+{% endif %}
 ## Task dispatch loop
 
 When the user says "continue", "next task", or runs `/next-task`:
@@ -1070,7 +1087,7 @@ def test_role_card_lists_its_owned_paths_and_forbids_others(load_fixture):
     man = render(cfg)
     card = man[".claude/agents/backend.md"]
     assert "services/api/**" in card
-    assert "Never:" in card
+    assert "Never edit another role's territory" in card
     assert "services/ui/**" in card  # named as another role's territory
 
 
@@ -1113,7 +1130,8 @@ def test_memory_stub_explains_the_linked_index_convention(load_fixture):
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_render_agents.py -v`
-Expected: FAIL — `TemplateNotFound: role.md.j2`
+Expected: FAIL — `KeyError: '.claude/agents/architect.md'`. Not `TemplateNotFound`: `render()` does
+not load `role.md.j2` until Step 3b, so the manifest simply lacks the agent paths.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -1133,6 +1151,7 @@ You are the **{{ role.name }}** engineer for {{ project.name }}.
 ## Boundaries
 
 Own:
+
 {% for p in role.owns %}
 - `{{ p }}`
 {% endfor %}
@@ -1153,6 +1172,7 @@ Run `{{ cfg.toolchain.test }}` and paste the command plus its last line in your 
 green without running it.
 
 ## Floors{% if role.veto %} — you hold the veto{% endif %}
+
 
 {% for floor in cfg.floors %}
 - {{ floor }}

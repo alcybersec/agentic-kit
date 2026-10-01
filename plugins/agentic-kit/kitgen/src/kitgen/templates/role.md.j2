@@ -11,11 +11,12 @@ You are the **{{ role.name }}** engineer for {{ project.name }}.
 ## Boundaries
 
 Own:
+
 {% for p in role.owns %}
 - `{{ p }}`
 {% endfor %}
 
-Never: edit another role's territory — request the change instead:
+Never edit another role's territory — request the change instead:
 {% for other in roles %}
 {% if other.name != role.name %}
 - `{{ other.name }}`: {% for p in other.owns %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %}
@@ -31,6 +32,7 @@ Run `{{ cfg.toolchain.test }}` and paste the command plus its last line in your 
 green without running it.
 
 ## Floors{% if role.veto %} — you hold the veto{% endif %}
+
 
 {% for floor in cfg.floors %}
 - {{ floor }}

@@ -29,7 +29,7 @@ def test_role_card_lists_its_owned_paths_and_forbids_others(load_fixture):
     man = render(cfg)
     card = man[".claude/agents/backend.md"]
     assert "services/api/**" in card
-    assert "Never:" in card
+    assert "Never edit another role's territory" in card
     assert "services/ui/**" in card  # named as another role's territory
 
 
