@@ -1970,7 +1970,7 @@ Add rows with `/risk`. Number them `R-001` upward and never reuse a number.
 
 `templates/CONTRACTS.md.j2`:
 
-```jinja
+````jinja
 # Contracts
 
 Every interface crossing a role boundary is recorded here **before** it is implemented: shape,
@@ -1996,7 +1996,7 @@ The `Contract` column holds the name from that contract's `###` heading in Curre
 
 | Date | Contract | Version | Change | Task |
 |---|---|---|---|---|
-```
+````
 
 `templates/adr-0001.md.j2`:
 
