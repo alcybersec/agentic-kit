@@ -1,0 +1,55 @@
+{# templates/settings.json.j2 #}
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash({{ cfg.toolchain.test }}:*)",
+      "Bash({{ cfg.toolchain.format }}:*)",
+      "Bash({{ cfg.toolchain.lint }}:*)",
+      "Bash({{ cfg.toolchain.types }}:*)",
+      "Bash({{ cfg.toolchain.pm }}:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git commit --only:*)",
+      "Bash(git switch:*)",
+      "Bash(git worktree:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(sed -n:*)"
+{% if forge.kind != 'none' %}
+      ,"Bash({{ forge.cli }}:*)"
+{% endif %}
+    ],
+    "deny": [
+{% for s in cfg.secrets %}
+      "Read({{ s }})",
+      "Edit({{ s }})",
+{% endfor %}
+      "Edit(./.claude/settings.json)",
+      "Edit(./.claude/kit.lock.json)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git add -A:*)",
+      "Bash(git add .:*)",
+      "Bash(git commit -a:*)",
+      "Bash(git stash:*)",
+      "Bash(docker compose down -v:*)",
+      "Agent(orchestrator)"
+{% if forge.exclusive and forge.kind == 'gitlab' %}
+      ,"Bash(gh:*)"
+{% elif forge.exclusive and forge.kind == 'github' %}
+      ,"Bash(glab:*)"
+{% endif %}
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+  }
+}

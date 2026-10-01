@@ -26,6 +26,7 @@ TEMPLATES = Path(__file__).parent / "templates"
 SINGLETONS = {
     "CLAUDE.md.j2": "CLAUDE.md",
     "orchestrator.md.j2": ".claude/agents/orchestrator.md",
+    "settings.json.j2": ".claude/settings.json",
 }
 
 

@@ -16,6 +16,7 @@ def expected_paths(cfg):
         ".claude/kit.yaml",
         ".claude/kit.lock.json",
         ".claude/agents/orchestrator.md",
+        ".claude/settings.json",
     }
     for r in cfg.roles:
         paths.add(f".claude/agents/{r.name}.md")
