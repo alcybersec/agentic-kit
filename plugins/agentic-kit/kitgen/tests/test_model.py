@@ -87,3 +87,37 @@ def test_duplicate_role_names_rejected():
 def test_lock_json_roundtrips():
     cfg = KitConfig.from_dict(MINIMAL)
     assert KitConfig.from_dict(cfg.to_lock()).to_lock() == cfg.to_lock()
+
+
+def test_mirror_equal_to_kind_is_rejected():
+    bad = {**MINIMAL, "forge": {**MINIMAL["forge"], "mirror": "gitlab"}}
+    with pytest.raises(ConfigError, match="mirror"):
+        KitConfig.from_dict(bad)
+
+
+def test_unknown_forge_kind_is_rejected():
+    bad = {**MINIMAL, "forge": {**MINIMAL["forge"], "kind": "bitbucket"}}
+    with pytest.raises(ConfigError, match="unknown forge kind"):
+        KitConfig.from_dict(bad)
+
+
+def test_missing_spine_key_is_rejected():
+    bad = {**MINIMAL, "spine": {k: v for k, v in MINIMAL["spine"].items()
+                                if k != "strategy"}}
+    with pytest.raises(ConfigError, match="strategy"):
+        KitConfig.from_dict(bad)
+
+
+def test_non_boolean_observability_is_rejected():
+    with pytest.raises(ConfigError, match="observability"):
+        KitConfig.from_dict({**MINIMAL, "observability": "false"})
+
+
+def test_glob_prefix_truncates_to_a_whole_segment():
+    from kitgen.model import _overlaps
+    assert _overlaps("src/a*/x/**", "src/ab/**")
+    assert _overlaps("src/[ab]/**", "src/a/**")
+    assert _overlaps("services/{api,worker}/**", "services/api/**")
+    assert not _overlaps("src/foo/**", "src/foobar/**")
+    assert not _overlaps("services/api/**", "services/ui/**")
+    assert _overlaps("**/*.py", "totally/unrelated/**")

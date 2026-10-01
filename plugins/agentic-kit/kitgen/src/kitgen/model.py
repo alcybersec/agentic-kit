@@ -1,23 +1,45 @@
 """Project profile model. Pure data plus validation; no filesystem access."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
 CLI_FOR_FORGE = {"gitlab": "glab", "github": "gh", "none": "none"}
+DEFAULT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
 
 
 class ConfigError(ValueError):
     """A project profile violated a constraint from the design spec, §5.2."""
 
 
+_WILD = re.compile(r"[*?\[{]")
+
+
 def _glob_prefix(pattern: str) -> str:
-    """The literal directory prefix of a glob, used for overlap detection."""
-    head = pattern.split("*", 1)[0]
-    return head.rstrip("/")
+    """The literal *directory* prefix of a glob, used for overlap detection.
+
+    Truncates at the first wildcard metacharacter and then back to the last
+    path separator, so a mid-segment wildcard cannot leave a partial segment
+    behind: `src/a*/x/**` yields `src`, not `src/a`. A pattern whose first
+    segment is already wild yields `""`.
+    """
+    m = _WILD.search(pattern)
+    if not m:
+        return pattern.rstrip("/")
+    head = pattern[:m.start()]
+    return head[:head.rfind("/")] if "/" in head else ""
 
 
 def _overlaps(a: str, b: str) -> bool:
+    """Whether two ownership globs may match the same file.
+
+    Overlap is tested on literal directory prefixes, so `owns` globs must be
+    directory-rooted. A glob whose first segment is wild has no prefix and is
+    treated as overlapping everything, which means a profile containing one can
+    never validate: extension-partitioned ownership of a shared tree
+    (`app/**/*.py` vs `app/**/*.tsx`) is rejected by design.
+    """
     pa, pb = _glob_prefix(a), _glob_prefix(b)
     if not pa or not pb:
         return True
@@ -30,8 +52,7 @@ class Role:
     description: str
     owns: list[str]
     handoff_extra: list[str] = field(default_factory=list)
-    tools: list[str] = field(default_factory=lambda: [
-        "Read", "Write", "Edit", "Glob", "Grep", "Bash"])
+    tools: list[str] = field(default_factory=lambda: list(DEFAULT_TOOLS))
     veto: bool = False
 
 
@@ -71,31 +92,62 @@ class KitConfig:
 
     @property
     def veto_role(self) -> Role:
-        return next(r for r in self.roles if r.veto)
+        role = next((r for r in self.roles if r.veto), None)
+        if role is None:
+            raise ConfigError("no role carries veto: true")
+        return role
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> KitConfig:
-        roles = [Role(**r) for r in d["roles"]]
+        roles = [
+            Role(
+                name=r["name"],
+                description=r["description"],
+                owns=list(r["owns"]),
+                handoff_extra=list(r.get("handoff_extra", [])),
+                tools=list(r.get("tools", DEFAULT_TOOLS)),
+                veto=r.get("veto", False),
+            )
+            for r in d["roles"]
+        ]
         cfg = cls(
             kit_version=d["kit_version"],
             rendered_on=d["rendered_on"],
             project=Project(**d["project"]),
             forge=Forge(**d["forge"]),
-            attribution=d["attribution"],
-            spine=d["spine"],
-            load_order=d["load_order"],
-            milestones=d["milestones"],
+            attribution=dict(d["attribution"]),
+            spine=dict(d["spine"]),
+            load_order=[dict(e) for e in d["load_order"]],
+            milestones=dict(d["milestones"]),
             roles=roles,
             floors=list(d["floors"]),
-            test_tiers=d["test_tiers"],
-            toolchain=d["toolchain"],
+            test_tiers=dict(d["test_tiers"]),
+            toolchain=dict(d["toolchain"]),
             secrets=list(d["secrets"]),
-            observability=bool(d["observability"]),
+            observability=d["observability"],
         )
         cfg.validate()
         return cfg
 
     def validate(self) -> None:
+        required = {
+            "spine": ("plan", "strategy", "design", "decisions", "risks",
+                      "contracts", "inherited"),
+            "toolchain": ("pm", "test", "format", "lint", "types"),
+            "milestones": ("prefix", "id_format", "outline"),
+            "attribution": ("mention_assistant_in_commits",),
+        }
+        for section, keys in required.items():
+            present = getattr(self, section)
+            for key in keys:
+                if key not in present:
+                    raise ConfigError(f"{section} is missing {key!r}")
+
+        if not isinstance(self.observability, bool):
+            raise ConfigError(
+                f"observability must be a boolean, got "
+                f"{type(self.observability).__name__} {self.observability!r}")
+
         names = [r.name for r in self.roles]
         dupes = {n for n in names if names.count(n) > 1}
         if dupes:
