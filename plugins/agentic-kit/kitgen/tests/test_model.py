@@ -1,5 +1,5 @@
 import pytest
-from kitgen.model import KitConfig, ConfigError
+from kitgen.model import DEFAULT_TOOLS, KitConfig, ConfigError
 
 MINIMAL = {
     "kit_version": "1.0.0",
@@ -249,3 +249,211 @@ def test_forge_none_with_a_remote_ci_or_mirror_is_rejected(field, value):
     d["forge"][field] = value
     with pytest.raises(ConfigError, match=f"forge.{field}"):
         KitConfig.from_dict(d)
+
+
+# --- fix 2.2: the overlap truth table ----------------------------------------
+#
+# Exclusive path ownership is the kit's central invariant and `_overlaps` is the
+# only thing enforcing it, yet eight mutants of it survived the audit: the
+# function was exercised only through profiles that happened to be valid, so most
+# of its logic was never pinned.
+#
+# The audit also reported that "two roles can currently declare the identical glob
+# and validate". That is NOT true — `src/a/**` twice yields equal prefixes and is
+# rejected — and the first row below is here to keep it false.
+
+OVERLAP = [
+    # (a, b, overlaps, why)
+    ("src/a/**", "src/a/**", True, "identical globs"),
+    ("docs/x.md", "docs/x.md", True, "identical literals, no wildcard at all"),
+    ("src/a/**", "src/a/b/**", True, "b is inside a"),
+    ("src/a/b/**", "src/a/**", True, "a is inside b — the check is symmetric"),
+    ("src/a/**", "src/a", True, "a directory and its own tree"),
+    ("src/a/", "src/a/**", True, "a trailing slash is not a different directory"),
+    ("docs/x.md", "docs/**", True, "a file inside a claimed tree"),
+    ("src/a/**", "src/b/**", False, "disjoint siblings"),
+    ("src/a/**", "src/ab/**", False,
+     "a prefix that is a string prefix but not a PATH prefix"),
+    ("src/a*/x/**", "src/ab/x/**", True,
+     "a mid-segment wildcard truncates to `src`, so this is conservative on purpose"),
+    ("**/*.py", "app/**", True, "a wild first segment has no prefix: overlaps all"),
+    ("*.py", "*.ts", True,
+     "extension-partitioned ownership of one tree is rejected by design (§5.2)"),
+]
+
+
+@pytest.mark.parametrize("a,b,expected,why", OVERLAP,
+                         ids=[f"{c[0]}|{c[1]}" for c in OVERLAP])
+def test_overlap_truth_table(a, b, expected, why):
+    from kitgen.model import _overlaps
+    assert _overlaps(a, b) is expected, why
+    # Symmetry is load-bearing: validate() compares each pair once, in roster
+    # order, so an asymmetric answer would make the verdict depend on which role
+    # happens to be listed first.
+    assert _overlaps(b, a) is expected, f"not symmetric: {why}"
+
+
+PREFIX = [
+    ("src/a/**", "src/a"),
+    ("src/a/", "src/a"),
+    ("src/a", "src/a"),
+    ("docs/x.md", "docs/x.md"),
+    ("src/a*/x/**", "src"),      # back to the last separator, never a part-segment
+    ("src/*/x", "src"),
+    ("**/*.py", ""),
+    ("*.py", ""),
+    ("src/a[0-9]/**", "src"),    # [ is a metacharacter
+    ("src/a{b,c}/**", "src"),    # so is {
+    ("src/a?/**", "src"),        # and ?
+]
+
+
+@pytest.mark.parametrize("pattern,prefix", PREFIX)
+def test_glob_prefix_truth_table(pattern, prefix):
+    from kitgen.model import _glob_prefix
+    assert _glob_prefix(pattern) == prefix
+
+
+@pytest.mark.parametrize("a,b,expected,why", OVERLAP,
+                         ids=[f"{c[0]}|{c[1]}" for c in OVERLAP])
+def test_a_profile_follows_the_overlap_table(a, b, expected, why):
+    """The table drives validate() as well, so the two cannot drift apart."""
+    if a.endswith("/") or b.endswith("/"):
+        pytest.skip("a trailing slash is rejected by the normalisation check first, "
+                    "which runs before overlap — the unit test above still pins "
+                    "that _overlaps itself handles it")
+    bad = {**MINIMAL, "roles": [
+        {**MINIMAL["roles"][0], "owns": [a]},
+        {**MINIMAL["roles"][1], "owns": [b]},
+    ]}
+    if expected:
+        with pytest.raises(ConfigError, match="ownership overlap"):
+            KitConfig.from_dict(bad)
+    else:
+        assert [r.owns for r in KitConfig.from_dict(bad).roles] == [[a], [b]]
+
+
+# --- fix 2.3: the profile-key matrix -----------------------------------------
+#
+# Twenty-two mutants survived in from_dict / _check_shapes, because every test
+# fed it a profile that was either valid or broken in one hand-picked way. The
+# CLI maps any failure here to exit 2 ("bad profile"), so what matters is that
+# NOTHING gets through, and that the message names the key — a profile is edited
+# by a human and "KeyError" is not a diagnosis.
+
+REQUIRED_TOP = ["kit_version", "rendered_on", "project", "forge", "attribution",
+                "spine", "load_order", "milestones", "roles", "floors",
+                "test_tiers", "toolchain", "secrets", "observability"]
+
+
+@pytest.mark.parametrize("key", REQUIRED_TOP)
+def test_every_top_level_key_is_required(key):
+    bad = {k: v for k, v in MINIMAL.items() if k != key}
+    with pytest.raises((ConfigError, KeyError, TypeError)) as e:
+        KitConfig.from_dict(bad)
+    assert key in str(e.value), (key, str(e.value))
+
+
+MAPPING_SECTIONS = ["attribution", "spine", "milestones", "test_tiers", "toolchain"]
+LIST_SECTIONS = ["load_order", "roles", "floors", "secrets"]
+
+
+@pytest.mark.parametrize("section", MAPPING_SECTIONS)
+@pytest.mark.parametrize("wrong", ["a string", 3, ["a", "list"], None])
+def test_a_mapping_section_given_a_non_mapping_is_rejected(section, wrong):
+    bad = {**MINIMAL, section: wrong}
+    with pytest.raises(ConfigError, match=f"{section} must be a mapping"):
+        KitConfig.from_dict(bad)
+
+
+@pytest.mark.parametrize("section", LIST_SECTIONS)
+@pytest.mark.parametrize("wrong", ["a string", 3, {"a": "map"}, None])
+def test_a_list_section_given_a_non_list_is_rejected(section, wrong):
+    bad = {**MINIMAL, section: wrong}
+    with pytest.raises(ConfigError, match=f"{section} must be a list"):
+        KitConfig.from_dict(bad)
+
+
+@pytest.mark.parametrize("wrong", ["a string", 3, ["nested"], None])
+def test_a_role_that_is_not_a_mapping_is_rejected(wrong):
+    bad = {**MINIMAL, "roles": [wrong]}
+    with pytest.raises(ConfigError, match="each role must be a mapping"):
+        KitConfig.from_dict(bad)
+
+
+@pytest.mark.parametrize("key", ["name", "description", "owns"])
+def test_a_role_missing_a_required_key_is_rejected(key):
+    roles = [{**MINIMAL["roles"][0]}, MINIMAL["roles"][1]]
+    del roles[0][key]
+    with pytest.raises((ConfigError, KeyError, TypeError)) as e:
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+    assert key in str(e.value), (key, str(e.value))
+
+
+@pytest.mark.parametrize("key,default", [("handoff_extra", []),
+                                         ("tools", DEFAULT_TOOLS),
+                                         ("veto", False)])
+def test_an_optional_role_key_falls_back_to_its_default(key, default):
+    """These three are optional on purpose, so their absence must not raise — and
+    the default has to be the documented one, since `tools` missing `Skill` would
+    make /handoff uninvokable and `veto` defaulting to True would hand a second
+    role a block."""
+    roles = [{**MINIMAL["roles"][0]}, MINIMAL["roles"][1]]
+    roles[0].pop(key, None)   # MINIMAL does not set `tools` at all
+    cfg = KitConfig.from_dict({**MINIMAL, "roles": roles})
+    assert getattr(cfg.roles[0], key) == default
+
+
+def test_an_unknown_role_key_names_the_role_and_the_key():
+    """A typo in a role key is the likeliest profile error there is, and silently
+    ignoring it would drop the setting the user thought they had made."""
+    roles = [{**MINIMAL["roles"][0], "ownz": ["src/**"]}, MINIMAL["roles"][1]]
+    with pytest.raises(ConfigError, match=r"role 'architect' has unknown keys: \['ownz'\]"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+def test_an_unnamed_role_with_an_unknown_key_still_reports_usefully():
+    roles = [{"owns": ["src/**"], "zzz": 1}, MINIMAL["roles"][1]]
+    with pytest.raises(ConfigError, match=r"role '<unnamed>' has unknown keys"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+REQUIRED_SUB = [
+    ("spine", "plan"), ("spine", "strategy"), ("spine", "design"),
+    ("spine", "decisions"), ("spine", "risks"), ("spine", "contracts"),
+    ("spine", "inherited"),
+    ("toolchain", "pm"), ("toolchain", "test"), ("toolchain", "format"),
+    ("toolchain", "lint"), ("toolchain", "types"),
+    ("milestones", "prefix"), ("milestones", "id_format"), ("milestones", "outline"),
+    ("attribution", "mention_assistant_in_commits"),
+]
+
+
+@pytest.mark.parametrize("section,key", REQUIRED_SUB,
+                         ids=[f"{s}.{k}" for s, k in REQUIRED_SUB])
+def test_every_required_subkey_is_required(section, key):
+    bad = {**MINIMAL, section: {k: v for k, v in MINIMAL[section].items()
+                                if k != key}}
+    with pytest.raises((ConfigError, KeyError, TypeError)) as e:
+        KitConfig.from_dict(bad)
+    assert key in str(e.value), (section, key, str(e.value))
+
+
+def test_veto_role_raises_rather_than_returning_none():
+    """`validate()` already rejects a roster without exactly one veto role, so this
+    is the defensive half: `veto_role` is a public property the templates call, and
+    a KitConfig built directly — bypassing from_dict — must not hand them None and
+    turn the omission into an UndefinedError three layers away."""
+    import dataclasses
+    cfg = KitConfig.from_dict(MINIMAL)
+    novetoes = dataclasses.replace(
+        cfg, roles=[dataclasses.replace(r, veto=False) for r in cfg.roles])
+    with pytest.raises(ConfigError, match="no role carries veto: true"):
+        _ = novetoes.veto_role
+
+
+def test_more_than_one_veto_role_is_rejected_by_name():
+    roles = [{**MINIMAL["roles"][0], "veto": True}, MINIMAL["roles"][1]]
+    with pytest.raises(ConfigError, match=r"exactly one role must carry veto: true, "
+                                          r"found \['architect', 'safety'\]"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})

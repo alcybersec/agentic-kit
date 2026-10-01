@@ -486,3 +486,34 @@ def test_the_agent_table_is_read_when_it_is_the_last_thing_in_the_file(load_fixt
     problems = verify(man, cfg)
     assert not any("agent table" in p for p in problems), problems
     assert not any("absent from the CLAUDE.md agent table" in p for p in problems), problems
+
+
+# --- fix 2.2: _covers, the other half of the path logic -----------------------
+#
+# A different question from _overlaps: not "may these two globs collide" but
+# "does this glob claim this one literal path". It decides which role owns
+# `forge.ci` and `spine.contracts`, so a wrong answer reassigns a task.
+
+COVERS = [
+    # (glob, path, covers, why)
+    (".github/workflows/**", ".github/workflows/ci.yml", True, "a file in the tree"),
+    (".github/workflows", ".github/workflows/ci.yml", True,
+     "a directory claim covers what is under it"),
+    (".github/workflows/ci.yml", ".github/workflows/ci.yml", True, "exact literal"),
+    ("docs/**", "docs/CONTRACTS.md", True, "a file in the tree"),
+    ("src/**", "docs/CONTRACTS.md", False, "a different tree"),
+    (".gitlab-ci.yml", ".github/workflows/ci.yml", False, "a different file"),
+    ("docs/adr/**", "docs", True,
+     "the path is a PARENT of the claim: writing docs/ touches the claimed tree"),
+    ("**/*.yml", ".github/workflows/ci.yml", True,
+     "a wild first segment has no prefix, and fnmatch decides"),
+    ("docs/a*/**", "docs/adr/0001.md", True, "mid-segment wildcard, via the prefix"),
+    ("docs/ab/**", "docs/a", False, "a string prefix that is not a path prefix"),
+]
+
+
+@pytest.mark.parametrize("glob,path,expected,why", COVERS,
+                         ids=[f"{c[0]}|{c[1]}" for c in COVERS])
+def test_covers_truth_table(glob, path, expected, why):
+    from kitgen.verify import _covers
+    assert _covers(glob, path) is expected, why
