@@ -32,6 +32,37 @@ from .verify import verify
 HOOKS_PREFIX = ".claude/hooks/"
 
 
+def _blockers(out: Path, manifest: dict[str, str]) -> list[str]:
+    """Existing paths that stand in the way and that `--force` must not remove.
+
+    Two shapes, both of which make the write fail rather than overwrite:
+    a non-directory where a parent directory has to be created (`mkdir` raises
+    NotADirectoryError / FileExistsError), and a directory where a file has to be
+    written (`write_text` raises IsADirectoryError).
+
+    They are separated from clashes because clearing one means deleting a path
+    the kit does not own, which is beyond "replace the generated scaffolding".
+    Leaving them out of the preflight made `--dry-run --force` predict 0 for a
+    run that exits 4 having already written part of the tree -- the one thing
+    §7.1b says a preview must never do.
+    """
+    bad: set[str] = set()
+    for rel in manifest:
+        parts = rel.split("/")
+        for depth in range(1, len(parts) + 1):
+            sub = "/".join(parts[:depth])
+            target = out / sub
+            # `is_symlink` as well as `exists`: a broken symlink is invisible to
+            # exists() and still makes both mkdir and write_text fail.
+            if not (target.exists() or target.is_symlink()):
+                break
+            wants_dir = depth < len(parts)
+            if target.is_dir() != wants_dir:
+                bad.add(sub)
+                break
+    return sorted(bad)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kitgen")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -93,8 +124,11 @@ def main(argv: list[str] | None = None) -> int:
             print(p, file=sys.stderr)
         return 1
 
-    # Directories count as clashes too (.exists(), not .is_file()).
-    clashes = sorted(p for p in manifest if (args.out / p).exists())
+    # A clash is a FILE where the manifest wants a file: --force overwrites it,
+    # subject to is_preserved. Anything else in the way is a blocker, which
+    # --force does not clear -- see _blockers.
+    blockers = _blockers(args.out, manifest)
+    clashes = sorted(p for p in manifest if (args.out / p).is_file())
     frozen: list[str] = []
     overwrite: list[str] = []
     if args.force:
@@ -110,9 +144,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"manifest": sorted(manifest),
                           "clashes": clashes,
                           "frozen": frozen,
-                          "overwrite": overwrite}, indent=2))
-        return 3 if clashes else 0
+                          "overwrite": overwrite,
+                          "blocked": blockers}, indent=2))
+        return 3 if clashes or blockers else 0
 
+    if blockers:
+        print(f"refusing to write: {blockers} stand in the way -- a file where a "
+              f"directory must be created, or a directory where a file must be "
+              f"written. --force does not remove these, because they are not the "
+              f"kit's to delete. Move or delete them by hand and re-run.",
+              file=sys.stderr)
+        return 3
     if clashes:
         print(f"refusing to overwrite: {clashes}", file=sys.stderr)
         return 3

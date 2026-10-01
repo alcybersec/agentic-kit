@@ -220,10 +220,15 @@ def test_refusal_names_every_clashing_path(tmp_path, capsys):
     assert "CLAUDE.md" in err and "docs/strategy.md" in err
 
 
-def test_a_directory_at_a_manifest_path_is_a_clash(tmp_path):
+@pytest.mark.parametrize("extra", [[], ["--force"]])
+def test_a_directory_at_a_manifest_path_is_refused(tmp_path, extra):
+    """Still 3, but as a blocker rather than a clash: --force clears a clash, and
+    a directory cannot be written over, so clearing this one would mean deleting
+    it. Both forms must refuse."""
     _seed_spine(tmp_path)
     (tmp_path / "CLAUDE.md").mkdir()
-    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 3
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]
+                + extra) == 3
 
 
 def test_missing_profile_file_exits_two(tmp_path, capsys):
@@ -296,16 +301,19 @@ def test_write_failure_on_a_readonly_directory_exits_four(tmp_path, capsys):
     assert "--force" in err
 
 
-def test_write_failure_on_a_directory_where_a_file_belongs_exits_four(tmp_path, capsys):
+def test_a_directory_where_a_file_belongs_is_refused_before_any_write(tmp_path, capsys):
+    """Used to exit 4 after writing 14 files, including the lock. `write_text`
+    cannot overwrite a directory, and --force must not delete one to make room,
+    so the preflight refuses with 3 and the tree is left untouched (§7.1b)."""
     _seed_spine(tmp_path)
     (tmp_path / ".claude/agents/backend.md").mkdir(parents=True)
+    before = _tree(tmp_path)
     rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--force"])
     err = capsys.readouterr().err
-    assert rc == 4
-    assert "write failed at .claude/agents/backend.md" in err
-    assert "IsADirectoryError" in err
-    assert ".claude/kit.lock.json" in err   # written before the failure, so listed
-    assert "--force" in err
+    assert rc == 3
+    assert ".claude/agents/backend.md" in err
+    assert "--force does not remove these" in err
+    assert _tree(tmp_path) == before
 
 
 def test_attribute_error_inside_validation_exits_two(tmp_path, capsys):
@@ -320,15 +328,43 @@ def test_attribute_error_inside_validation_exits_two(tmp_path, capsys):
     assert "AttributeError" in capsys.readouterr().err
 
 
-def test_write_failure_creating_a_parent_directory_exits_four(tmp_path, capsys):
-    """A regular file where a directory belongs fails in mkdir, not write_text."""
+@pytest.mark.parametrize("extra", [[], ["--force"]])
+def test_a_file_where_a_parent_directory_belongs_is_refused(tmp_path, capsys, extra):
+    """`mkdir` cannot create a directory under a regular file. The old behaviour
+    exited 4 partway through; a `.claude` that is a file now blocks every path
+    beneath it and is reported once, by the directory, not eleven times."""
     _seed_spine(tmp_path)
     (tmp_path / ".claude").write_text("i am a file")
-    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)])
+    before = _tree(tmp_path)
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)] + extra)
     err = capsys.readouterr().err
-    assert rc == 4
-    assert "write failed at .claude/" in err
-    assert "CLAUDE.md" in err
+    assert rc == 3
+    assert "['.claude']" in err, "reported once, by the directory, not per path"
+    assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("make", [
+    lambda root: (root / ".claude").write_text("a file where a directory goes"),
+    lambda root: (root / ".claude/agents/backend.md").mkdir(parents=True),
+    lambda root: (root / "docs/adr").symlink_to("nowhere-at-all"),
+])
+def test_dry_run_predicts_a_blocked_tree(tmp_path, capsys, make):
+    """§7.1b: `--dry-run` returns the code the real run would return. These three
+    obstructions were invisible to the preflight, so the preview said 0 for a run
+    that failed partway with 4 -- including the broken symlink, which `exists()`
+    reports as absent while `mkdir` still refuses it."""
+    _seed_spine(tmp_path)
+    (tmp_path / "docs").mkdir(exist_ok=True)
+    make(tmp_path)
+    before = _tree(tmp_path)
+    dry = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                "--dry-run", "--force"])
+    assert json.loads(capsys.readouterr().out)["blocked"] != []
+    real = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--force"])
+    capsys.readouterr()
+    assert dry == real == 3
+    assert _tree(tmp_path) == before
 
 
 # --- §7.1a: --force replaces scaffolding, it does not discard the project's work ---

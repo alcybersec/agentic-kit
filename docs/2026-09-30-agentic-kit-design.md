@@ -522,8 +522,13 @@ a classification before that is written, not after:
 | `plan/README.md` | **generate-once** — it is pure state after the first task, so a re-render *deletes* the dispatch record |
 | `adr/0001-adopt-agentic-kit.md` | **generate-once** — it stamps `rendered_on` and `kit_version`; re-rendering restamps an *Accepted* ADR with a later install's date, falsifying the record it exists to preserve |
 
-`kitgen` therefore declares a `GENERATE_ONCE` set beside `SINGLETONS`, and the CLI **never** overwrites
-anything in it — `--force` included. `--force` means "replace the generated scaffolding", not "discard
+`kitgen` therefore declares `GENERATE_ONCE` and `LIVING` beside `SINGLETONS`, with
+`render.is_preserved()` as the single answer to "must an existing copy of this path survive?" — the two
+sets plus every path under `.claude/agent-memory/`, matched by prefix because the roster is per-profile.
+The CLI **never** overwrites anything it reports — `--force` included. (Amended 2026-10-01, fix 0.3:
+until then only the two generate-once paths were held back, so `--force` restored the empty scaffold
+over all five living documents and every role's memory, and this table described an intention the code
+did not implement.) `--force` means "replace the generated scaffolding", not "discard
 history", so regenerating a generate-once file is a deliberate manual act: delete it first. The CLI
 reports on stderr which files it kept, naming each, so the skip is never silent.
 
@@ -556,6 +561,25 @@ Codes 1 and 3 guarantee an untouched tree. Code 4 does not, and is the only stat
 half-installed: the CLI is not atomic, and its stderr names the file that failed and the files already
 written so the caller can tell how far it got. Collapsing a write failure into 1 would tell a skill
 that verification failed when in fact a partial kit is on disk.
+
+**Clashes and blockers are distinct, and `--force` clears only the first** (amended 2026-10-01, fix 0.4).
+A *clash* is a regular file where the manifest wants a file: `--force` overwrites it, subject to §7.1a.
+A *blocker* is something in the way that cannot be written through and that `--force` must **not**
+remove, because removing it means deleting a path the kit does not own:
+
+| Blocker | What fails |
+|---|---|
+| a non-directory where a parent directory must be created (including a *broken symlink*, which `exists()` reports as absent) | `mkdir` |
+| a directory where a file must be written | `write_text` |
+
+Both are detected in the preflight and return **3** with an untouched tree, whether or not `--force` was
+given, and are named on stderr once per obstruction rather than once per blocked path. Before the fix
+they were invisible to the preflight, so `--dry-run --force` predicted **0** for a run that exited **4**
+having already written fourteen files including the lock — the precise failure the paragraph above says
+a preview must never produce. `--dry-run` reports them under a `blocked` key.
+
+Code 4 therefore now means a write that failed for a reason the preflight cannot see: a read-only
+directory, a full disk, a revoked permission mid-run.
 
 ### 7.2 Brownfield preservation rule (normative)
 
