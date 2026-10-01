@@ -3306,6 +3306,20 @@ Expected: FAIL — `bash: .../hooks/pre-bash-guard.sh: No such file or directory
 # Every guard below ends in `exit 0`, silently: nothing on stdout or stderr.
 #
 # Exports: KIT_LOCK (path), KIT_INPUT (raw stdin), and kit_q() to query the lock.
+#
+# Path matching (kit_lexnorm, kit_candidates, kit_match_glob):
+#   kit_candidates <file_path> <cwd>   fills KIT_CANDS with project-relative spellings of
+#       the path (lexical, and the realpath target so a symlink is caught by name AND by
+#       target). Returns 1 when none is inside the project: "not ours to police", which is
+#       distinct from "inside but no match".
+#   kit_match_glob <patterns>          newline-separated globs, leading "./" optional;
+#       sets KIT_MATCHED (the pattern) and KIT_MATCHED_REL (the candidate) for the first
+#       match and returns 0, else returns 1. No stdout: callers need the vars, not a subshell.
+#
+# Task 12b's per-role ownership guard depends on these exact semantics. In particular:
+# `case` anchors the WHOLE string, so ".env" must never match ".env.example"; and `**`
+# in a bash case glob spans "/", so "secrets/**" matches "secrets/db/pw.txt". Patterns
+# are root-anchored: "./.env" does not cover "sub/.env".
 
 kit_bail_ok() { exit 0; }
 
@@ -3336,6 +3350,59 @@ kit_q() { jq -r "$1 // empty" "$KIT_LOCK" 2>/dev/null; }
 
 # kit_in <jq-filter> — query the hook payload
 kit_in() { printf '%s' "$KIT_INPUT" | jq -r "$1 // empty" 2>/dev/null; }
+
+# kit_lexnorm <abs-path> — collapse //, /./ and /../ without touching the filesystem.
+# Pure parameter expansion so a newline in the path cannot split it, and no `dirname`.
+kit_lexnorm() {
+  local rest="${1#/}" seg out=""
+  while :; do
+    seg="${rest%%/*}"
+    case "$seg" in
+      ''|.) ;;
+      ..)   out="${out%/*}" ;;
+      *)    out="$out/$seg" ;;
+    esac
+    case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+  done
+  printf '%s' "${out:-/}"
+}
+
+# kit_candidates <file_path> <cwd> — see header. Needs KIT_LOCK (after kit_init).
+kit_candidates() {
+  local path="$1" cwd="$2" root abs lex res root_lex root_res c
+  root="${KIT_LOCK%/.claude/kit.lock.json}"
+  [ -n "$cwd" ] || cwd="$root"
+  case "$path" in /*) abs="$path" ;; *) abs="$cwd/$path" ;; esac
+  lex=$(kit_lexnorm "$abs")
+  root_lex=$(kit_lexnorm "$root"); root_res="$root_lex"
+  local -a abss=("$lex")
+  if command -v realpath >/dev/null 2>&1; then
+    res=$(realpath -m -- "$abs" 2>/dev/null) && [ "$res" != "$lex" ] && abss+=("$res")
+    root_res=$(realpath -m -- "$root" 2>/dev/null) || root_res="$root_lex"
+  fi
+  KIT_CANDS=(); export KIT_CANDS
+  for c in "${abss[@]}"; do
+    case "$c" in
+      "$root_lex"/*) KIT_CANDS+=("${c#"$root_lex"/}") ;;
+      "$root_res"/*) KIT_CANDS+=("${c#"$root_res"/}") ;;
+    esac
+  done
+  [ "${#KIT_CANDS[@]}" -gt 0 ]
+}
+
+# kit_match_glob <newline-separated patterns> — see header.
+kit_match_glob() {
+  local pattern pat c
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] || continue
+    pat="${pattern#./}"
+    for c in "${KIT_CANDS[@]}"; do
+      # shellcheck disable=SC2254  # the pattern is a glob on purpose; case anchors it
+      case "$c" in $pat) KIT_MATCHED="$pattern"; KIT_MATCHED_REL="$c"; export KIT_MATCHED KIT_MATCHED_REL; return 0 ;; esac
+    done
+  done <<<"$1"
+  return 1
+}
 
 # kit_deny <reason> — block the tool call, per the Claude Code hook contract
 kit_deny() {
@@ -4025,6 +4092,21 @@ git commit -m "feat(hooks): pre-bash-guard enforcing atomic commits and forge ex
 
 ## Task 12: `pre-file-guard`
 
+> **Amended after implementation.** The committed hook is the authority. The draft's normalisation
+> collapsed neither `..` nor symlinks, so `<root>/src/../.env` and a symlink pointing at `.env` both
+> slipped through — a secret reachable by a path that does not look like one is the whole failure this
+> hook exists to prevent. It now tests a path by its lexical form **and** its `realpath -m` target, and
+> resolves relative paths against the payload's `cwd` rather than the root.
+>
+> The matcher lives in `lib/kitlock.sh` as `kit_lexnorm` / `kit_candidates` / `kit_match_glob`, because
+> **Task 12b's ownership guard needs byte-identical semantics** — the same anchored `case` decides
+> whether a role may write a path, and two copies of a subtle matcher is the drift class this build has
+> been bitten by three times. `kit_candidates` needs `kit_init` to have run, takes the root from
+> `KIT_LOCK`, and signals "outside the project" distinctly from "no match".
+>
+> `pre-bash-guard`'s own secret scan is deliberately **not** rewired to these helpers: it tokenises a
+> command string rather than matching one path, so unifying them would need its own adversarial pass.
+
 **Files:**
 - Modify: `plugins/agentic-kit/hooks/pre-file-guard.sh`
 - Test: `plugins/agentic-kit/kitgen/tests/test_pre_file_guard.py`
@@ -4034,6 +4116,7 @@ git commit -m "feat(hooks): pre-bash-guard enforcing atomic commits and forge ex
 ```python
 # plugins/agentic-kit/kitgen/tests/test_pre_file_guard.py
 import json
+import os
 
 import pytest
 
@@ -4054,7 +4137,11 @@ def make_project(tmp_path, secrets):
     return tmp_path
 
 
-@pytest.mark.parametrize("tool", ["Read", "Edit", "Write"])
+def blocked(p, tool, path):
+    return run_hook(HOOK, file_payload(tool, path, p), p).returncode == 2
+
+
+@pytest.mark.parametrize("tool", ["Read", "Edit", "Write", "NotebookEdit"])
 def test_a_secret_file_is_blocked_for_every_tool(tmp_path, tool):
     p = make_project(tmp_path, ["./.env", "./secrets/**"])
     r = run_hook(HOOK, file_payload(tool, str(p / ".env"), p), p)
@@ -4076,20 +4163,96 @@ def test_an_ordinary_file_is_allowed(tmp_path):
 
 def test_a_relative_path_is_matched_too(tmp_path):
     p = make_project(tmp_path, ["./.env"])
-    assert run_hook(HOOK, file_payload("Read", ".env", p), p).returncode == 2
+    assert blocked(p, "Read", ".env")
+    assert blocked(p, "Read", "./.env")
 
 
 def test_a_lookalike_name_is_not_blocked(tmp_path):
     p = make_project(tmp_path, ["./.env"])
-    for safe in [".env.example", "docs/env.md", "src/environment.py"]:
+    for safe in [".env.example", ".env.local", "env", "a.env", "sub/.env",
+                 "docs/env.md", "src/environment.py", "README.md"]:
         r = run_hook(HOOK, file_payload("Read", str(p / safe), p), p)
         assert r.returncode == 0, safe
+
+
+def test_glob_boundaries(tmp_path):
+    p = make_project(tmp_path, ["./secrets/**"])
+    for safe in ["secrets", "secretsfile", "secrets.md", "src/secrets/x"]:
+        assert not blocked(p, "Read", str(p / safe)), safe
+    assert blocked(p, "Read", str(p / "secrets/a"))
+
+
+def test_dot_dot_segments_are_normalised(tmp_path):
+    p = make_project(tmp_path, ["./.env"])
+    assert blocked(p, "Read", str(p / "src/../.env"))
+    assert blocked(p, "Read", "src/../.env")
+    assert not blocked(p, "Read", str(p / "src/../.env.example"))
+
+
+def test_a_path_that_escapes_and_returns_is_still_inside(tmp_path):
+    p = make_project(tmp_path, ["./.env"])
+    assert blocked(p, "Read", f"{p}/../{p.name}/.env")
+
+
+def test_a_path_outside_the_project_is_not_policed(tmp_path):
+    p = make_project(tmp_path / "proj", ["./.env", "./secrets/**"])
+    assert not blocked(p, "Read", str(tmp_path / ".env"))
+    assert not blocked(p, "Read", "/etc/hostname")
+    assert not blocked(p, "Read", str(p / "../.env"))
+    # a sibling sharing the root's name as a prefix is outside too
+    assert not blocked(p, "Read", str(p) + "-other/.env")
+
+
+def test_a_symlink_to_a_secret_is_caught_by_its_target(tmp_path):
+    p = make_project(tmp_path, ["./.env"])
+    (p / ".env").write_text("TOKEN=x")
+    os.symlink(p / ".env", p / "innocent.txt")
+    assert blocked(p, "Read", str(p / "innocent.txt"))
+
+
+def test_a_symlink_named_like_a_secret_is_caught_by_its_name(tmp_path):
+    p = make_project(tmp_path, ["./.env"])
+    (p / "real.txt").write_text("x")
+    os.symlink(p / "real.txt", p / ".env")
+    assert blocked(p, "Read", str(p / ".env"))
+
+
+def test_a_relative_path_resolves_against_cwd_not_root(tmp_path):
+    p = make_project(tmp_path, ["./.env", "./secrets/**"])
+    (p / "secrets").mkdir()
+    payload = file_payload("Read", "pw.txt", p / "secrets")
+    assert run_hook(HOOK, payload, p).returncode == 2
+    payload = file_payload("Read", ".env", p / "sub")
+    assert run_hook(HOOK, payload, p).returncode == 0  # sub/.env, not ./.env
+
+
+def test_spaces_and_newlines_in_paths(tmp_path):
+    p = make_project(tmp_path, ["./my secrets/**", "./.env"])
+    assert blocked(p, "Read", str(p / "my secrets/a b.txt"))
+    assert not blocked(p, "Read", str(p / "my secrets"))
+    assert not blocked(p, "Read", str(p / "x\n.env"))
+    assert not blocked(p, "Read", str(p / "a\nb/ok.txt"))
+
+
+def test_the_message_names_the_pattern_and_the_alternative(tmp_path):
+    p = make_project(tmp_path, ["./secrets/**"])
+    r = run_hook(HOOK, file_payload("Read", str(p / "secrets/x"), p), p)
+    msg = json.loads(r.stderr)["systemMessage"]
+    assert "./secrets/**" in msg and "secrets/x" in msg
+    assert ".example" in msg
 
 
 def test_no_file_path_in_the_payload_is_allowed(tmp_path):
     p = make_project(tmp_path, ["./.env"])
     r = run_hook(HOOK, {"tool_name": "Read", "tool_input": {}, "cwd": str(p)}, p)
     assert r.returncode == 0
+
+
+def test_an_empty_or_missing_secrets_list_blocks_nothing(tmp_path):
+    p = make_project(tmp_path, [])
+    assert not blocked(p, "Read", str(p / ".env"))
+    (p / ".claude/kit.lock.json").write_text("{}")
+    assert not blocked(p, "Read", str(p / ".env"))
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -4102,33 +4265,29 @@ Expected: FAIL — blocking cases return 0
 ```bash
 # plugins/agentic-kit/hooks/pre-file-guard.sh
 #!/usr/bin/env bash
-# PreToolUse/Read,Edit,Write guard. Denies the paths named in kit.lock.json
-# "secrets", matched relative to the project root.
+# PreToolUse/Read,Edit,Write,NotebookEdit guard. Denies the paths named in
+# kit.lock.json "secrets", matched relative to the project root.
+#
+# Redundant with the Read/Edit deny rules in .claude/settings.json on purpose: this reads
+# the lock at call time and explains which pattern matched. It is not a containment
+# boundary. Path logic lives in lib/kitlock.sh (shared with the ownership guard).
 set -uo pipefail
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
-path=$(kit_in '.tool_input.file_path')
+path=$(kit_in '.tool_input.file_path | strings')
 [ -n "$path" ] || exit 0
 
-root=$(dirname "$(dirname "$KIT_LOCK")")
-# Normalise to a path relative to the project root, no leading "./".
-rel="$path"
-case "$rel" in
-  "$root"/*) rel="${rel#"$root"/}" ;;
-  /*)        exit 0 ;;   # outside the project: not ours to police
-esac
-rel="${rel#./}"
+kit_candidates "$path" "$(kit_in '.cwd | strings')" || exit 0   # outside the project
 
-while IFS= read -r pattern; do
-  [ -n "$pattern" ] || continue
-  pat="${pattern#./}"
-  # shellcheck disable=SC2254  # the pattern is a glob on purpose
-  case "$rel" in
-    $pat) kit_deny "Blocked: ${rel} matches a secret path (${pattern}) in .claude/kit.yaml. Never read or print it; use the .example template instead." ;;
-  esac
-done < <(jq -r '.secrets[]? // empty' "$KIT_LOCK")
-
+patterns=$(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
+if kit_match_glob "$patterns"; then
+  kit_deny "Blocked: ${KIT_MATCHED_REL} matches the secret path pattern '${KIT_MATCHED}' (profile \"secrets\" in .claude/kit.yaml). Do not read, edit or print it. If you need the file's shape, use the committed .example template (e.g. .env.example); if you need a value, ask the user to supply it."
+fi
 exit 0
 ```
 
