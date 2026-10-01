@@ -182,11 +182,19 @@ observability: true                # when true, the "ships with the feature" rul
   which is neither a `ConfigError` nor actionable.
 - `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
   coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
-- Ownership globs MUST be **normalised**: repository-root-relative, with no leading `./`, no `//` and
-  no `../`. Overlap is decided on literal path prefixes, so `./src/**` and `src/**` would compare as
-  disjoint while overlapping in fact — and §5's `secrets: ["./.env"]` establishes the leading-`./`
-  convention in the same file, which makes the mistake a natural one. A non-normalised glob is
-  rejected rather than silently rewritten.
+- Ownership globs MUST be **normalised**: repository-root-relative, forward-slashed, with no leading
+  `/`, no `.`, `..` or empty segment, and no backslash. Overlap is decided on literal path prefixes,
+  so any unnormalised spelling of the same path compares as disjoint while overlapping in fact —
+  `./src/**` against `src/**`, `/src/**` against `src/**`, a bare `.` against anything. §5's
+  `secrets: ["./.env"]` establishes the leading-`./` convention in the same file, and detection can
+  report an absolute path or the repository root as `.`, so both spellings are reachable. The check is
+  per path **segment**, not a list of forbidden substrings, and a non-normalised glob is rejected
+  rather than silently rewritten. A leading dot in a segment *name* (`.github/workflows/**`,
+  `.gitlab-ci.yml`) is not a `.` segment and is valid.
+
+  Case folding is deliberately **not** applied. `Src/**` and `src/**` name the same directory on a
+  case-insensitive volume and different ones on ext4; normalising would be wrong on Linux, so the
+  kit treats them as distinct and does not pretend otherwise.
 - Role entries MUST carry no unknown keys. A misspelled `handoff_extra` would otherwise load as an
   empty list, and §9.1's per-role handoff check passes vacuously on an empty list — so the role card
   would render with no handoff lines and nothing downstream would notice.
