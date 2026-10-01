@@ -26,7 +26,9 @@ kit_init() {
 
   KIT_LOCK="$root/.claude/kit.lock.json"
   [ -f "$KIT_LOCK" ] || kit_bail_ok
-  jq -e 'type == "object"' "$KIT_LOCK" >/dev/null 2>&1 || kit_bail_ok
+  # Compare the output: `jq -e` exits 0 on an EMPTY file (no input, no output), which
+  # would let a zero-byte lock through as if it were a profile.
+  [ "$(jq -r 'type' "$KIT_LOCK" 2>/dev/null)" = "object" ] || kit_bail_ok
 
   export KIT_INPUT KIT_LOCK
 }
