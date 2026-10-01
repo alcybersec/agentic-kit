@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 
 CLI_FOR_FORGE = {"gitlab": "glab", "github": "gh", "none": "none"}
-DEFAULT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+DEFAULT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Skill"]
 
 
 class ConfigError(ValueError):

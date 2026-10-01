@@ -67,3 +67,13 @@ def test_memory_stub_explains_the_linked_index_convention(load_fixture):
     stub = render(cfg)[".claude/agent-memory/data/MEMORY.md"]
     assert "one fact per file" in stub.lower()
     assert "[[" in stub
+
+
+def test_every_role_card_can_run_the_handoff_skill(load_fixture):
+    """strategy.md §9 makes the /handoff note the gate for accepting work."""
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        man = render(cfg)
+        for r in cfg.roles:
+            tools = [t.strip() for t in frontmatter(man[f".claude/agents/{r.name}.md"])["tools"].split(",")]
+            assert "Skill" in tools, (name, r.name)

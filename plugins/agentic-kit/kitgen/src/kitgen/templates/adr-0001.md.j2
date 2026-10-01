@@ -14,7 +14,7 @@ Adopt the `agentic-kit` orchestrator model:
 - A default **Orchestrator** that plans, dispatches and validates, and writes no implementation code.
 - {{ roles | length }} roles with **exclusive file-path ownership**, listed in
   `{{ cfg.spine.strategy }}` §2.
-- **`{{ veto.name }}` holds a veto** on gates, scoped to the floors in §6.
+- **`{{ veto.name }}` holds a veto** on gates, scoped to the floors in `{{ cfg.spine.strategy }}` §6.
 - A docs spine as the source of truth: `{{ cfg.spine.plan }}` for state,
   `{{ cfg.spine.strategy }}` for rules and the task graph.
 - Handoff notes carrying pasted test evidence.

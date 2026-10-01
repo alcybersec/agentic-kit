@@ -55,12 +55,14 @@ carried silently.
 {% endfor %}
 
 Floors are append-only. Removing or weakening one requires an ADR and the user's explicit agreement.
-{% if cfg.observability %}
 
 ## 7. Observability
 
+{% if cfg.observability %}
 Every stage lands with counters, latency metrics and structured logs in the same task that
 implements it — never as a follow-up.
+{% else %}
+Not applicable for this project.
 {% endif %}
 
 ## 8. Contracts
@@ -87,6 +89,10 @@ Task IDs follow `{{ cfg.milestones.id_format }}`. **Only the open milestone is e
 Orchestrator expands the next milestone's tasks at gate time; a graph written further ahead than the
 work is invented work.
 
+To expand a milestone: copy the `### {{ cfg.milestones.outline[0].id }}` block's three parts (Entry conditions, Tasks, Gate
+additions) above the Later-milestones list, remove its line from that list, and set its §10 Status
+to `open`. §10 Status is derived from `{{ cfg.spine.plan }}`, which is authoritative.
+
 ### {{ cfg.milestones.outline[0].id }} — {{ cfg.milestones.outline[0].name }}
 
 **Entry conditions**
@@ -94,9 +100,10 @@ work is invented work.
 - [ ] The user has reviewed {% if cfg.spine.inherited %}{% for p in cfg.spine.inherited %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} and {% endif %}this file.
 - [ ] The role roster in §2 is accepted.
 - [ ] The floors in §6 are accepted.
-- [ ] The floor test tier has a home that `{{ veto.name }}` owns in §2. If every test path belongs to
-  another role, decide with the user who owns it before dispatching — the ownership guard blocks a
-  role from writing another's tree, so an unowned decision here stalls the task.
+- [ ] Every role named in the M0 table below has a test path it owns in §2, or test paths are left
+  unowned. If every test path belongs to one role, decide with the user who owns what before
+  dispatching — the ownership guard blocks a role from writing another's tree, so an unowned decision
+  here stalls three of the four M0 tasks.
 {% if forge.kind != 'none' %}
 - [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
 {% endif %}
@@ -105,10 +112,13 @@ work is invented work.
 
 | ID | Owner | Outputs | Tests | Acceptance |
 |---|---|---|---|---|
-| {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton | Boundaries match §2 and the user accepts them |
-| {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-002 | `devops` | dev environment reproducible from a clean clone; `{{ cfg.toolchain.test }}` runs | the suite runs green and empty | A clean clone reaches a green run in one documented command |
-| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier, in a path `{{ veto.name }}` owns per §2, wired into CI, one test per floor in §6 | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
-| {{ cfg.milestones.outline[0].id }}-S1-QA-004 | `qa` | tier thresholds from §3 enforced in CI | coverage gate fails below floor | A deliberate coverage drop reddens the pipeline |
+| {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton in a path `architect` owns per §2 | Boundaries match §2 and the user accepts them |
+| {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-002 | `devops` | dev environment reproducible from a clean clone; `{{ cfg.toolchain.test }}` runs | one trivial smoke test, in a path `devops` owns per §2 or an unowned path, so the suite is wired | A clean clone reaches a green run in one documented command; exit code 5 from an empty collection is a failure, not a pass |
+| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier, in a path `{{ veto.name }}` owns per §2, one test per floor in §6{% if forge.kind != 'none' %}; a handoff line asking `devops` to wire it into CI{% endif %} | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
+| {{ cfg.milestones.outline[0].id }}-S1-QA-004 | `qa` | tier thresholds from §3 as config in a path `qa` owns per §2 or an unowned path{% if forge.kind != 'none' %}; a handoff line asking `devops` to enforce them in CI{% endif %} | coverage gate fails below floor | A deliberate coverage drop fails `{{ cfg.toolchain.test }}`{% if forge.kind != 'none' %} locally and, once {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-005 lands, in the pipeline{% endif %} |
+{% if forge.kind != 'none' %}
+| {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-005 | `devops` | the floor tier ({{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003) and the coverage thresholds ({{ cfg.milestones.outline[0].id }}-S1-QA-004) wired into `{{ forge.ci }}` | a pipeline run shows both stages | A deliberate floor violation and a deliberate coverage drop each redden the pipeline |
+{% endif %}
 
 **Gate additions:** the floor tier must be non-empty and green, and every floor in §6 must map to a
 named test.

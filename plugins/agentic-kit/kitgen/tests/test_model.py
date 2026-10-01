@@ -182,3 +182,10 @@ def test_empty_toolchain_value_is_rejected(value):
     bad = {**MINIMAL, "toolchain": {**MINIMAL["toolchain"], "format": value}}
     with pytest.raises(ConfigError, match="toolchain.format"):
         KitConfig.from_dict(bad)
+
+
+def test_default_tools_include_skill():
+    """The handoff protocol depends on it: every role card ends with 'run /handoff',
+    and a subagent without the Skill tool cannot invoke a slash skill at all."""
+    from kitgen.model import DEFAULT_TOOLS
+    assert "Skill" in DEFAULT_TOOLS
