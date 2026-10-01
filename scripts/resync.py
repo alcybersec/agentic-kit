@@ -15,6 +15,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from fences import blocks  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# A positional `N:path` spec names a block by index, and an index that is off by one
+# silently rewrites a neighbouring block: a 69-line Python test block was once
+# replaced with a 118-line Jinja template, and check_plan_sync.py could not see it
+# because it only ever looks at the indices it expects. The fence language is the
+# cheap cross-check -- it has to agree with the file's own kind.
+FENCE_LANG = {".j2": "jinja", ".py": "python", ".sh": "bash", ".json": "json",
+              ".md": "markdown", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml"}
 PLAN = ROOT / "docs/superpowers/plans/2026-09-30-agentic-kit-m1.md"
 
 
@@ -45,6 +53,13 @@ def main(argv: list[str]) -> int:
             missed.append(f"{start[:-1]} has {len(found)} blocks, need index {idx}")
             continue
         body, fence, lang = found[idx]
+        want = FENCE_LANG.get(pathlib.Path(rel).suffix)
+        if want and lang != want:
+            missed.append(
+                f"{start[:-1]} block {idx} is a ```{lang or '(none)'} block, but "
+                f"{rel} belongs in a ```{want} one -- refusing to overwrite it. "
+                f"Check the index against check_plan_sync.py's table.")
+            continue
         if body != live:
             sec = sec.replace(f"{fence}{lang}\n{body}{fence}",
                               f"{fence}{lang}\n{live}{fence}", 1)

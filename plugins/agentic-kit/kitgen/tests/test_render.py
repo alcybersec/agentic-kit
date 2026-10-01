@@ -148,7 +148,8 @@ def test_claude_md_has_every_section(load_fixture):
             assert heading in body, (name, heading)
         # the Forge section is conditional on there being a forge
         assert ("## Forge:" in body) == (cfg.forge.kind != "none"), name
-        assert body.rstrip().endswith("after updating the plugin."), name
+        assert body.rstrip().endswith(
+            "a disarmed guard looks exactly like an inert one."), name
 
 
 def test_claude_md_is_well_formed_markdown(load_fixture):

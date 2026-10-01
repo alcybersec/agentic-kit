@@ -115,4 +115,5 @@ When the user says "continue", "next task", or runs `/next-task`:
 This project uses the `agentic-kit` plugin ({{ cfg.kit_version }}). Its profile is
 `.claude/kit.yaml`; `.claude/kit.lock.json` is generated from it and is what hooks read. Process
 skills: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-status`. Run
-`/kit-upgrade` after updating the plugin.
+`/kit-upgrade` after updating the plugin, and `/kit-doctor` to check the guards are actually firing —
+they exit quietly when they cannot run, so a disarmed guard looks exactly like an inert one.

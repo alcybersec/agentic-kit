@@ -8,7 +8,7 @@ import yaml
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 EXPECTED = {"next-task", "gate-check", "handoff", "new-adr", "risk",
-            "plan-status", "agent-memory", "orchestrating"}
+            "plan-status", "agent-memory", "orchestrating", "kit-doctor"}
 # Skills the user invokes deliberately; the model must not fire them on its own.
 EXPLICIT_ONLY = {"next-task", "gate-check"}
 

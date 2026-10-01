@@ -269,6 +269,7 @@ the official marketplace plugins.
 | `new-adr <title>` | Scaffold `docs/adr/NNNN-<slug>.md`, append to `spine.decisions` index. |
 | `risk` | Add or update a row in `spine.risks`. |
 | `plan-status` | Read-only grounding: milestone, next task, open gates, open risks. |
+| `kit-doctor` | Run `bin/kit-doctor.sh`: fire every guard with a payload it must refuse and report which ones did, plus `jq`, the lock's readability, lock-vs-profile freshness, the formatter's presence on PATH, and whether each role card registers the ownership guard. Added 2026-10-01 (fix 1.2). It exists because §4.3's inertness rule makes a **disarmed** guard and a **correctly inert** one indistinguishable: everything exits 0, and Claude Code reads any non-2 exit as "continue". Nothing else in the kit can tell the two apart. Exit 0 all-clear, 1 otherwise, and it states the two things no script can check — workspace trust and Bash. |
 | `agent-memory` | The `.claude/agent-memory/<role>/MEMORY.md` convention: one fact per file, a one-line linked index entry per fact, `[[wikilinks]]` between facts. |
 | `orchestrating` | Dispatch doctrine: pass paths not pasted documents; `git commit --only <path>`; `isolation: "worktree"` when 2+ agents are dispatched in one message or scopes overlap; worktree merge protocol; never `git stash` for recovery. |
 
