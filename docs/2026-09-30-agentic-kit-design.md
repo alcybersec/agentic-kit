@@ -164,6 +164,10 @@ observability: true                # when true, the "ships with the feature" rul
   `jq` — present essentially everywhere — rather than `yq`, which is not. The kit is meant to be
   shareable, so a hook must not depend on a tool the recipient may lack.
 - The lock is the kit's **presence marker** for §4.3.
+- Because the generated `settings.json` denies `Edit` on itself and on `kit.lock.json`, **no skill may
+  rewrite either with the Edit tool.** `/kit-upgrade` must regenerate them by invoking the `kitgen`
+  CLI, whose subprocess writes permission rules never see. `kit.yaml` is deliberately left editable:
+  it is the human-facing source of truth, and hand-editing it is the drift signal above, not an error.
 - `mtime(kit.yaml) > mtime(kit.lock.json)` means hand-edited drift: skills warn and point at
   `/kit-upgrade`; hooks ignore it and use the lock.
 
@@ -183,8 +187,11 @@ observability: true                # when true, the "ships with the feature" rul
 - Every `toolchain` value MUST be a non-empty command string. An empty one renders the permission rule
   `Bash(:*)`, whose meaning depends on how the host parses an empty prefix — plausibly
   match-everything, which would silently void the deny list it sits beside.
-- Secret paths are denied for `Read`, `Edit` **and** `Write`. Denying only the first two leaves the
-  file writable, which is the same exposure by a different verb.
+- Secret paths are denied for `Read` **and** `Edit`, and for nothing else. Per the permissions
+  documentation a `Read` deny "also blocks the Edit and Write tools on the same path, including
+  creating a new file there", while "NotebookEdit isn't covered, so add an `Edit` deny rule" — so the
+  pair is the complete closure over every file tool. A `Write(path)` rule is **accepted but never
+  consulted, and warns at startup**, so emitting one is strictly worse than omitting it.
 - `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
   coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
 - Ownership globs MUST be **normalised**: repository-root-relative, forward-slashed, with no leading
@@ -279,10 +286,22 @@ these hooks match on **command strings**, so neither is a sandbox:
 - A command routed through an allow-listed interpreter is unconstrained. `toolchain.pm` becomes
   `Bash(uv:*)` so that ordinary work does not prompt, and `uv run python -c "…"` therefore matches no
   deny rule however destructive its argument.
-- `Bash(cat:*)` is allowed because reading files is ordinary work, so `cat ./.env` is not stopped by
-  `Read(./.env)` — a *path* deny cannot see into a shell command. `pre-bash-guard` closes this
-  specific case by inspecting Bash commands for `secrets` paths, which is why that check exists in
-  addition to `pre-file-guard`.
+- Path denies reach further into Bash than one might expect, and `cat ./.env` **is** blocked: they
+  apply "to file commands Claude Code recognizes in Bash, such as `cat`, `head`, `tail`, `sed`, and
+  `tee`, and to the targets of Bash redirections such as `> file` and `< file`". The residual gap is
+  narrower and specific — a reader Claude Code does not recognise (`xxd`, `base64`, `strings`), a
+  command that does not name the file (`grep -r TOKEN .`), and any interpreter. `pre-bash-guard`'s
+  secret check exists for exactly that remainder, not because path denies are blind to shell.
+- **Exclusive file-path ownership — the kit's headline claim — is enforced by nothing mechanical.**
+  `settings.json` grants `Edit` at the tool level for every path, role cards state boundaries in
+  prose, and `pre-file-guard` polices only `secrets`. A role editing another role's tree is caught by
+  review, or not at all. This is the largest item on this list and the one most likely to be mistaken
+  for a guarantee.
+
+What the deny list does have going for it is precedence: "deny rules from any scope are evaluated
+before allow rules", and a hook cannot loosen them — "Claude Code evaluates deny and ask rules
+regardless of what a PreToolUse hook returns". So a deny rule is the strongest instrument here; there
+are simply fewer things it can express than its wording suggests.
 
 The honest claim is that this layer stops **accidents and drift by a cooperative agent** — the
 staging sweep, the force push, the volume-deleting `down -v`, the wrong forge CLI, the credential
@@ -408,8 +427,9 @@ asked individually.
 | 12 | Toolchain commands | detected |
 
 **Floors are the one question with no default and no inference.** They are the project's
-non-regressing invariants, they scope the veto role, and they become `strategy.md` §6 and a deny
-rule. The installer MUST block on the user's answer rather than guess.
+non-regressing invariants, they scope the veto role, and they become `strategy.md` §6. They do **not**
+become permission rules: a floor is an invariant ("the safety tier is append-only", "p99 under
+200 ms"), not a command string, and nothing in the rendered `settings.json` reads `floors`. The installer MUST block on the user's answer rather than guess.
 
 ### 8.4 Role roster derivation
 

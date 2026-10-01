@@ -2691,10 +2691,12 @@ def test_attribution_is_allowed_when_the_profile_permits_it(tmp_path):
 
 
 def test_a_command_naming_a_secret_path_is_blocked(tmp_path):
-    """Read(./.env) is denied in settings.json but Bash(cat:*) is allowed, so a path
-    deny cannot stop `cat ./.env`. Only this hook sees the command string."""
+    """Read/Edit denies already cover cat/head/tail/sed/tee and redirection targets.
+    This hook covers the remainder: readers Claude Code does not recognise, and
+    interpreters. Overlapping with the path deny on `cat` is harmless."""
     p = make_project(tmp_path)
-    for cmd in ["cat .env", "cat ./.env", "grep -r TOKEN .env", "cp .env /tmp/x"]:
+    for cmd in ["base64 .env", "xxd ./.env", "strings .env",
+                "python -c \"print(open('.env').read())\"", "cp .env /tmp/x"]:
         r = run_hook(HOOK, bash_payload(cmd, p), p)
         assert r.returncode == 2, cmd
         assert "secret path" in r.stderr
@@ -2708,7 +2710,8 @@ def test_a_glob_secret_is_matched_by_its_literal_prefix(tmp_path):
 
 def test_an_unrelated_command_is_not_blocked_by_the_secret_check(tmp_path):
     p = make_project(tmp_path)
-    for safe in ["cat README.md", "ls -la", "cat .env.example"]:
+    for safe in ["cat README.md", "ls -la", "cat .env.example",
+                 "cp .env.example .env", "grep -r TOKEN src/"]:
         assert run_hook(HOOK, bash_payload(safe, p), p).returncode == 0, safe
 
 
@@ -2765,19 +2768,26 @@ while IFS= read -r seg; do
   esac
 done <<< "$segments"
 
-# A path deny cannot see inside a shell command: Read(./.env) is denied while
-# Bash(cat:*) is allowed, so `cat ./.env` would otherwise be unguarded. This is the
-# only place that gap can be closed.
-while IFS= read -r pattern; do
-  [ -n "$pattern" ] || continue
-  pat="${pattern#./}"
-  pat="${pat%%\**}"
-  [ -n "$pat" ] || continue
-  case "$cmd" in
-    *"$pat"*)
-      kit_deny "Blocked: this command names ${pattern}, a secret path in .claude/kit.yaml. Never read or print it; use the .example template instead." ;;
-  esac
-done < <(jq -r '.secrets[]? // empty' "$KIT_LOCK")
+# Read/Edit denies already cover the file commands Claude Code recognizes in Bash
+# (cat, head, tail, sed, tee) and redirection targets. This check is for the
+# REMAINDER: readers it does not recognize (xxd, base64, strings) and interpreters.
+#
+# Match per WORD, anchored. An unanchored substring match over the whole command
+# would block `cat .env.example` and `cp .env.example .env` -- the very remediation
+# the deny message recommends.
+for word in $cmd; do
+  w="${word%\"}"; w="${w#\"}"; w="${w%\'}"; w="${w#\'}"; w="${w#./}"
+  [ -n "$w" ] || continue
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] || continue
+    pat="${pattern#./}"
+    # shellcheck disable=SC2254  # the pattern is a glob on purpose
+    case "$w" in
+      $pat)
+        kit_deny "Blocked: this command names ${pattern}, a secret path in .claude/kit.yaml. Never read or print it; use the .example template instead." ;;
+    esac
+  done < <(jq -r '.secrets[]? // empty' "$KIT_LOCK")
+done
 
 forge_kind=$(kit_q '.forge.kind')
 forge_cli=$(kit_q '.forge.cli')
