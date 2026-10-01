@@ -660,25 +660,15 @@ from kitgen.render import render
 FIXTURES = ["greenfield_prd", "python_monolith", "services_layout"]
 
 
+# Grows as templates land: Task 5 adds the agent cards and memory stubs, Task 6
+# settings.json, Task 7 the docs spine. Keeping it exact at every step means the
+# suite is green at every task boundary instead of red until Task 7.
 def expected_paths(cfg):
-    paths = {
+    return {
         "CLAUDE.md",
         ".claude/kit.yaml",
         ".claude/kit.lock.json",
-        ".claude/settings.json",
-        ".claude/agents/orchestrator.md",
-        "docs/plan/README.md",
-        "docs/strategy.md",
-        "docs/design.md",
-        "docs/decisions.md",
-        "docs/risk-register.md",
-        "docs/CONTRACTS.md",
-        "docs/adr/0001-adopt-agentic-kit.md",
     }
-    for r in cfg.roles:
-        paths.add(f".claude/agents/{r.name}.md")
-        paths.add(f".claude/agent-memory/{r.name}/MEMORY.md")
-    return paths
 
 
 def test_manifest_has_exactly_the_expected_paths(load_fixture):
@@ -812,18 +802,16 @@ from .model import KitConfig
 
 TEMPLATES = Path(__file__).parent / "templates"
 
-# template file -> output path; one entry per singleton output
+# template file -> output path; one entry per singleton output.
+#
+# This table GROWS as templates land, and render() loads every template it names.
+# Listing a template before it exists would make the whole suite raise
+# TemplateNotFound, so each task adds its own entries:
+#   Task 5 -> orchestrator.md.j2  (plus the per-role loop below)
+#   Task 6 -> settings.json.j2
+#   Task 7 -> plan/strategy/design/decisions/risk-register/CONTRACTS/adr-0001
 SINGLETONS = {
     "CLAUDE.md.j2": "CLAUDE.md",
-    "settings.json.j2": ".claude/settings.json",
-    "orchestrator.md.j2": ".claude/agents/orchestrator.md",
-    "plan.md.j2": "docs/plan/README.md",
-    "strategy.md.j2": "docs/strategy.md",
-    "design.md.j2": "docs/design.md",
-    "decisions.md.j2": "docs/decisions.md",
-    "risk-register.md.j2": "docs/risk-register.md",
-    "CONTRACTS.md.j2": "docs/CONTRACTS.md",
-    "adr-0001.md.j2": "docs/adr/0001-adopt-agentic-kit.md",
 }
 
 
@@ -853,11 +841,7 @@ def render(cfg: KitConfig) -> dict[str, str]:
     out[".claude/kit.yaml"] = yaml.safe_dump(lock, sort_keys=False, width=100)
     out[".claude/kit.lock.json"] = json.dumps(lock, indent=2, sort_keys=True) + "\n"
 
-    role_card = env.get_template("role.md.j2")
-    memory = env.get_template("MEMORY.md.j2")
-    for r in cfg.roles:
-        out[f".claude/agents/{r.name}.md"] = role_card.render(role=r, **ctx)
-        out[f".claude/agent-memory/{r.name}/MEMORY.md"] = memory.render(role=r, **ctx)
+    # Task 5 adds the per-role loop here (role.md.j2 and MEMORY.md.j2).
 
     return out
 ```
@@ -988,15 +972,15 @@ skills: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-sta
 
 - [ ] **Step 4: Run test to verify it passes**
 
-The remaining templates do not exist yet, so run only the CLAUDE.md-specific tests now:
-
-Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_render.py -k "agent_table or chosen_forge" -v`
-Expected: FAIL — `TemplateNotFound: settings.json.j2`. This is expected: Task 5–7 add the missing templates and the full file passes at Task 7 Step 4. Commit the skeleton now.
+Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/ -v`
+Expected: PASS — the whole suite, including every test in `test_render.py`. Because `SINGLETONS` names
+only `CLAUDE.md.j2`, `render()` loads only templates that exist, so there is no `TemplateNotFound` and
+the suite stays green at this boundary.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/agentic-kit/kitgen/src/kitgen/render.py plugins/agentic-kit/kitgen/src/kitgen/templates/CLAUDE.md.j2 plugins/agentic-kit/kitgen/tests/test_render.py
+git add plugins/agentic-kit/kitgen/src/kitgen/render.py plugins/agentic-kit/kitgen/src/kitgen/templates/CLAUDE.md.j2 plugins/agentic-kit/kitgen/tests/test_render.py plugins/agentic-kit/kitgen/tests/conftest.py
 git commit -m "feat(kitgen): pure render() with the CLAUDE.md template"
 ```
 
@@ -1008,6 +992,9 @@ git commit -m "feat(kitgen): pure render() with the CLAUDE.md template"
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/role.md.j2`
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/orchestrator.md.j2`
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/MEMORY.md.j2`
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/render.py` (add the `orchestrator.md.j2` entry to
+  `SINGLETONS` and the per-role loop)
+- Modify: `plugins/agentic-kit/kitgen/tests/test_render.py` (extend `expected_paths`)
 - Test: `plugins/agentic-kit/kitgen/tests/test_render_agents.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1230,15 +1217,45 @@ Do not record what the repository already says — structure, history, or anythi
 -->
 ```
 
+- [ ] **Step 3b: Wire the new templates into `render()`**
+
+Add `"orchestrator.md.j2": ".claude/agents/orchestrator.md",` to `SINGLETONS`, and replace the
+`# Task 5 adds the per-role loop here` comment with:
+
+```python
+    role_card = env.get_template("role.md.j2")
+    memory = env.get_template("MEMORY.md.j2")
+    for r in cfg.roles:
+        out[f".claude/agents/{r.name}.md"] = role_card.render(role=r, **ctx)
+        out[f".claude/agent-memory/{r.name}/MEMORY.md"] = memory.render(role=r, **ctx)
+```
+
+Then extend `expected_paths` in `tests/test_render.py` so the exact-path test still holds:
+
+```python
+def expected_paths(cfg):
+    paths = {
+        "CLAUDE.md",
+        ".claude/kit.yaml",
+        ".claude/kit.lock.json",
+        ".claude/agents/orchestrator.md",
+    }
+    for r in cfg.roles:
+        paths.add(f".claude/agents/{r.name}.md")
+        paths.add(f".claude/agent-memory/{r.name}/MEMORY.md")
+    return paths
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_render_agents.py -v`
-Expected: PASS, 7 passed
+Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/ -v`
+Expected: PASS — the whole suite, including `test_render_agents.py` (7 new) and the updated
+exact-path test in `test_render.py`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/agentic-kit/kitgen/src/kitgen/templates/role.md.j2 plugins/agentic-kit/kitgen/src/kitgen/templates/orchestrator.md.j2 plugins/agentic-kit/kitgen/src/kitgen/templates/MEMORY.md.j2 plugins/agentic-kit/kitgen/tests/test_render_agents.py
+git add plugins/agentic-kit/kitgen/src/kitgen/templates/role.md.j2 plugins/agentic-kit/kitgen/src/kitgen/templates/orchestrator.md.j2 plugins/agentic-kit/kitgen/src/kitgen/templates/MEMORY.md.j2 plugins/agentic-kit/kitgen/tests/test_render_agents.py plugins/agentic-kit/kitgen/src/kitgen/render.py plugins/agentic-kit/kitgen/tests/test_render.py
 git commit -m "feat(kitgen): role card, orchestrator card and agent-memory templates"
 ```
 
@@ -1248,6 +1265,8 @@ git commit -m "feat(kitgen): role card, orchestrator card and agent-memory templ
 
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/settings.json.j2`
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/render.py` (add the `settings.json.j2` entry)
+- Modify: `plugins/agentic-kit/kitgen/tests/test_render.py` (extend `expected_paths`)
 - Test: `plugins/agentic-kit/kitgen/tests/test_render_settings.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1393,15 +1412,21 @@ Expected: FAIL — `TemplateNotFound: settings.json.j2`
 }
 ```
 
+- [ ] **Step 3b: Wire it into `render()`**
+
+Add `"settings.json.j2": ".claude/settings.json",` to `SINGLETONS`, and add
+`".claude/settings.json"` to `expected_paths` in `tests/test_render.py`.
+
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_render_settings.py -v`
-Expected: PASS, 8 passed
+Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/ -v`
+Expected: PASS — the whole suite, including `test_render_settings.py` (9 new, counting the
+non-exclusive-forge case) and the updated exact-path test.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/agentic-kit/kitgen/src/kitgen/templates/settings.json.j2 plugins/agentic-kit/kitgen/tests/test_render_settings.py
+git add plugins/agentic-kit/kitgen/src/kitgen/templates/settings.json.j2 plugins/agentic-kit/kitgen/tests/test_render_settings.py plugins/agentic-kit/kitgen/src/kitgen/render.py plugins/agentic-kit/kitgen/tests/test_render.py
 git commit -m "feat(kitgen): settings.json template with forge-neutral deny rules"
 ```
 
@@ -1419,6 +1444,8 @@ git commit -m "feat(kitgen): settings.json template with forge-neutral deny rule
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/risk-register.md.j2`
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/CONTRACTS.md.j2`
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/templates/adr-0001.md.j2`
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/render.py` (add the final seven entries)
+- Modify: `plugins/agentic-kit/kitgen/tests/test_render.py` (complete `expected_paths`)
 - Test: `plugins/agentic-kit/kitgen/tests/test_render_spine.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1786,15 +1813,56 @@ Adopt the `agentic-kit` orchestrator model:
 {% endif %}
 ```
 
-- [ ] **Step 4: Run all render tests to verify they pass**
+- [ ] **Step 3b: Wire the last seven into `render()` and complete the path set**
 
-Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_render.py tests/test_render_spine.py tests/test_render_agents.py tests/test_render_settings.py -v`
-Expected: PASS — all four render test files green, including the Task 4 tests that were blocked on missing templates.
+Add to `SINGLETONS`:
+
+```python
+    "plan.md.j2": "docs/plan/README.md",
+    "strategy.md.j2": "docs/strategy.md",
+    "design.md.j2": "docs/design.md",
+    "decisions.md.j2": "docs/decisions.md",
+    "risk-register.md.j2": "docs/risk-register.md",
+    "CONTRACTS.md.j2": "docs/CONTRACTS.md",
+    "adr-0001.md.j2": "docs/adr/0001-adopt-agentic-kit.md",
+```
+
+`SINGLETONS` is now complete at ten entries. Finish `expected_paths` in `tests/test_render.py` so it
+covers the whole manifest, and delete the "grows as templates land" comment above it — the table is
+done growing:
+
+```python
+def expected_paths(cfg):
+    paths = {
+        "CLAUDE.md",
+        ".claude/kit.yaml",
+        ".claude/kit.lock.json",
+        ".claude/settings.json",
+        ".claude/agents/orchestrator.md",
+        "docs/plan/README.md",
+        "docs/strategy.md",
+        "docs/design.md",
+        "docs/decisions.md",
+        "docs/risk-register.md",
+        "docs/CONTRACTS.md",
+        "docs/adr/0001-adopt-agentic-kit.md",
+    }
+    for r in cfg.roles:
+        paths.add(f".claude/agents/{r.name}.md")
+        paths.add(f".claude/agent-memory/{r.name}/MEMORY.md")
+    return paths
+```
+
+- [ ] **Step 4: Run the whole suite**
+
+Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/ -v`
+Expected: PASS — every test file green, and `expected_paths` now asserts the complete manifest for all
+three fixtures. Record the count; `render()` is feature-complete at this point.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/agentic-kit/kitgen/src/kitgen/templates plugins/agentic-kit/kitgen/tests/test_render_spine.py
+git add plugins/agentic-kit/kitgen/src/kitgen/templates plugins/agentic-kit/kitgen/tests/test_render_spine.py plugins/agentic-kit/kitgen/src/kitgen/render.py plugins/agentic-kit/kitgen/tests/test_render.py
 git commit -m "feat(kitgen): docs spine templates, M0-only task graph"
 ```
 
