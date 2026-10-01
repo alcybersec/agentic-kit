@@ -115,6 +115,30 @@ Notes against the plan as written:
 | 0.6 | Make `M0-S1-ARCH-001` completable: fold `spine.contracts` into `architect.owns` at resolve time, **or** reword `/handoff` as "if *another role* owns it". Also resolve the acceptance clause that requires the user (I8). | `model.py` or `skills/handoff/SKILL.md`, `templates/strategy.md.j2` | a verify check that `spine.contracts` is owned or explicitly unowned-by-design |
 | 0.7 | Exempt `*.example|*.sample|*.template|*.dist` in the secret matcher — `./secrets/**` currently swallows its own template, so the deny message recommends a path it blocks. | `hooks/pre-file-guard.sh` (and the Bash secret scan) | `secrets/prod.yaml.example` must be readable |
 
+### Phase 1 — enforcement integrity (5) — **DONE 2026-10-01**
+
+`8744029` (1.1), `fa39ec2` (1.2), `0dc5a7a` (1.3), `6bd6dab` (1.4), `a35629f` (1.5).
+Suite 550 -> 599.
+
+Notes against the plan as written:
+- **1.2** became a shipped script (`bin/kit-doctor.sh`) with a skill fronting it, not a section of
+  `plan-status`: asking the model to hand-craft hook payloads is far less reliable than running a
+  script that does. It checks nine things, was verified against a correctly installed kit and against
+  four separate sabotages, and prints the two limits no script can test.
+- **1.3** replaced the hand-rolled matcher outright rather than adding to it, so there are now two
+  secret matchers sharing one implementation instead of three agreeing by coincidence.
+- **1.4** denies the write verbs *and* narrows the allow-list. The allow block has to branch on
+  `forge.kind` because `glab mr` and `gh pr` share no noun — which makes §6.3's "no rule names a
+  forge" false as written, now corrected there.
+- **1.5** searches every string leaf of the `SubagentHandback` `input` rather than a named field: the
+  schema is not something the hook can pin, and an unexpected one must not become a false block.
+
+Two defects in my own tooling surfaced during this phase and are fixed: `resync.py` would overwrite a
+block of the wrong kind given an index from the wrong task (it replaced a Python test block with a
+Jinja template, invisibly to `check_plan_sync.py`), and a new test was flaky because `st_mtime` is a
+float that cannot hold a filesystem timestamp exactly. Both are the same shape as the four safeguards
+that caused damage during the build.
+
 ### Phase 1 — enforcement integrity (5)
 
 | # | Fix | Notes |
