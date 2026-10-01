@@ -79,7 +79,10 @@ def test_a_real_but_non_exclusive_forge_denies_neither_cli(load_variant):
     perms = json.loads(render(cfg)[".claude/settings.json"])["permissions"]
     assert "Bash(gh:*)" not in perms["deny"]
     assert "Bash(glab:*)" not in perms["deny"]
-    assert "Bash(glab:*)" in perms["allow"]
+    # Its own CLI stays allowed, but by read verb: `Bash(glab:*)` pre-approved
+    # `glab mr merge` too (fix 1.4).
+    assert "Bash(glab:*)" not in perms["allow"]
+    assert "Bash(glab mr view:*)" in perms["allow"]
 
 
 def test_toolchain_commands_are_allowed(load_fixture):
@@ -185,3 +188,42 @@ def test_every_conditional_combination_still_emits_valid_json(load_variant, over
     cfg = load_variant("services_layout", **overrides)
     parsed = json.loads(render(cfg)[".claude/settings.json"])
     assert parsed["permissions"]["allow"] and parsed["permissions"]["deny"]
+
+
+# --- fix 1.4: the forge CLI is allowed by read verb, not wholesale ------------
+
+WRITE_VERBS = ["create", "close", "merge", "delete", "edit", "approve", "reopen"]
+
+
+@pytest.mark.parametrize("fixture,cli,nouns", [
+    ("services_layout", "glab", ["mr", "issue"]),
+    ("python_monolith", "gh", ["pr", "issue"]),
+])
+def test_no_forge_write_verb_is_pre_approved(load_fixture, fixture, cli, nouns):
+    """`Bash(glab:*)` matched `glab mr merge`, so the agent could open and merge
+    its own MR with no prompt — while the generated CLAUDE.md tells it the user
+    takes outward-facing actions. Anything absent from `allow` prompts; the write
+    verbs are additionally denied by `pre-bash-guard`, which explains why."""
+    allow = settings(load_fixture(fixture))["permissions"]["allow"]
+    assert f"Bash({cli}:*)" not in allow
+    for noun in nouns:
+        for verb in WRITE_VERBS:
+            assert f"Bash({cli} {noun} {verb}:*)" not in allow
+        assert f"Bash({cli} {noun} list:*)" in allow
+        assert f"Bash({cli} {noun} view:*)" in allow
+
+
+def test_a_github_project_gets_github_read_verbs(load_variant):
+    cfg = load_variant("services_layout",
+                       forge={"kind": "github", "cli": "gh", "exclusive": True,
+                              "remote": "git@github.com:o/r.git", "mirror": None,
+                              "ci": ".github/workflows/ci.yml"})
+    allow = settings(cfg)["permissions"]["allow"]
+    assert "Bash(gh pr view:*)" in allow and "Bash(gh run list:*)" in allow
+    assert "Bash(gh:*)" not in allow
+    assert not any(a.startswith("Bash(glab") for a in allow)
+
+
+def test_a_forgeless_project_allows_no_forge_cli(load_fixture):
+    allow = settings(load_fixture("greenfield_prd"))["permissions"]["allow"]
+    assert not any(a.startswith("Bash(gh") or a.startswith("Bash(glab") for a in allow)

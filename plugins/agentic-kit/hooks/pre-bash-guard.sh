@@ -167,6 +167,23 @@ check_segment() {
       if [ "$rec" -eq 1 ] && [ "$frc" -eq 1 ]; then
         kit_deny "Blocked: recursive forced 'rm' ('rm -rf') cannot be undone. Delete the specific paths with 'rm <file>' (or 'rm -r <dir>' without -f), or, for a build artefact, use the project's clean target (e.g. 'make clean'). Ask the user for anything broader."
       fi ;;
+    "$forge_cli")
+      # An MR, a PR, an issue and a release are visible to other people the moment
+      # they exist, and closing or merging one is not undoable from here. The kit's
+      # CLAUDE.md requires the user to take outward-facing actions, but
+      # `Bash(<cli>:*)` in settings.json pre-approved every one of them, so the
+      # agent could open and merge its own MR without a prompt. settings.json now
+      # allows only read verbs (fix 1.4); this is the half that explains itself.
+      #
+      # Read verbs are untouched: list, view, diff, checks, status.
+      local noun="${args[0]:-}" verb="${args[1]:-}"
+      case "$noun" in
+        issue|mr|pr|release)
+          case "$verb" in
+            create|close|reopen|merge|delete|approve|revoke|edit|update|note|comment)
+              kit_deny "Blocked: '${forge_cli} ${noun} ${verb}' is outward-facing -- it is visible to other people as soon as it runs, and closing or merging is not undoable from here. Put the proposed title, body and target branch in your handoff note and let the user run it. Reading is allowed: '${forge_cli} ${noun} list', 'view', 'diff'." ;;
+          esac ;;
+      esac ;;
     docker|docker-compose)
       local sawdown=0 vol=0
       if [ "$bin" = "docker" ] && [ "${args[0]:-}" != "compose" ]; then return 0; fi

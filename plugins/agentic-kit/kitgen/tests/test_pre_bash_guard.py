@@ -327,3 +327,53 @@ def test_the_shared_matcher_does_not_widen_the_block(tmp_path, command):
     p = make_project(tmp_path, secrets=["./.env"])
     r = run_hook(HOOK, bash_payload(command, p), p)
     assert r.returncode == 0, (command, r.stderr)
+
+
+# --- fix 1.4: outward-facing forge actions are the user's ---------------------
+
+@pytest.mark.parametrize("command", [
+    "glab mr create --title x --description y",
+    "glab mr merge 14",
+    "glab mr close 14",
+    "glab issue create -t bug",
+    "glab issue close 9",
+    "glab release create v1.0.0",
+    "glab mr approve 14",
+])
+def test_a_forge_write_verb_is_blocked(tmp_path, command):
+    p = make_project(tmp_path)
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 2, (command, r.stdout, r.stderr)
+    assert "outward-facing" in r.stderr
+    assert "handoff note" in r.stderr
+
+
+@pytest.mark.parametrize("command", [
+    "glab mr list",
+    "glab mr view 14",
+    "glab mr diff 14",
+    "glab issue list --assignee me",
+    "glab ci status",
+    "glab auth status",
+    "glab repo view",
+])
+def test_a_forge_read_verb_is_allowed(tmp_path, command):
+    p = make_project(tmp_path)
+    r = run_hook(HOOK, bash_payload(command, p), p)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+def test_the_write_verb_deny_follows_the_configured_forge(tmp_path):
+    """`gh pr merge` must block in a github project and `glab mr merge` must not
+    be the thing that blocks there — the other CLI is already refused by the
+    exclusivity rule, with a different message."""
+    p = make_project(tmp_path, forge={"kind": "github", "cli": "gh",
+                                      "exclusive": True, "mirror": None,
+                                      "remote": "git@github.com:o/r.git",
+                                      "ci": ".github/workflows/ci.yml"})
+    r = run_hook(HOOK, bash_payload("gh pr merge 3", p), p)
+    assert r.returncode == 2 and "outward-facing" in r.stderr
+    r = run_hook(HOOK, bash_payload("gh pr view 3", p), p)
+    assert r.returncode == 0, r.stderr
+    r = run_hook(HOOK, bash_payload("glab mr merge 3", p), p)
+    assert r.returncode == 2 and "forge is github" in r.stderr

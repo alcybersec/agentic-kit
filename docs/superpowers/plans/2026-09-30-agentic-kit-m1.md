@@ -1555,8 +1555,33 @@ Expected: FAIL — `TemplateNotFound: settings.json.j2`
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(sed -n:*)"
-{% if forge.kind != 'none' %}
-      ,"Bash({{ forge.cli }}:*)"
+{# Read verbs only. `Bash(<cli>:*)` pre-approved `mr create` and `mr merge` too,
+   which are outward-facing: visible to other people the moment they run, and not
+   undoable from here. pre-bash-guard denies the write verbs and says why; this
+   half simply stops pre-approving them, so anything not listed prompts the user.
+   The nouns differ per forge, so §6.3's "no rule names a forge" does not hold for
+   this block -- it cannot. #}
+{% if forge.kind == 'gitlab' %}
+      ,"Bash(glab auth status:*)"
+      ,"Bash(glab mr list:*)"
+      ,"Bash(glab mr view:*)"
+      ,"Bash(glab mr diff:*)"
+      ,"Bash(glab issue list:*)"
+      ,"Bash(glab issue view:*)"
+      ,"Bash(glab ci status:*)"
+      ,"Bash(glab ci view:*)"
+      ,"Bash(glab repo view:*)"
+{% elif forge.kind == 'github' %}
+      ,"Bash(gh auth status:*)"
+      ,"Bash(gh pr list:*)"
+      ,"Bash(gh pr view:*)"
+      ,"Bash(gh pr diff:*)"
+      ,"Bash(gh pr checks:*)"
+      ,"Bash(gh issue list:*)"
+      ,"Bash(gh issue view:*)"
+      ,"Bash(gh run list:*)"
+      ,"Bash(gh run view:*)"
+      ,"Bash(gh repo view:*)"
 {% endif %}
     ],
     "deny": [

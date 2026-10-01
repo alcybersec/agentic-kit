@@ -448,11 +448,27 @@ A clean `claude plugin validate` therefore means the manifest parses and the eve
 
 ### 6.3 Forge neutrality (normative)
 
-No rule names a forge. `forge.kind` is an interview answer and the guard enforces the chosen one:
+**No *hardcoded* forge**, which is not the same as no rule naming one — the original wording
+overstated it (corrected 2026-10-01). `settings.json`'s allow-list and `pre-bash-guard`'s
+exclusivity check both name `glab` and `gh` literally, and must: the two CLIs do not share a noun
+(`mr` against `pr`), so a verb-level rule cannot be written without branching on the kind. What the
+rule means is that nothing in the kit *assumes* a forge, every forge-specific string derives from
+`forge.kind`, and `kind: none` renders no forge rule at all. Adding a third forge is a template
+branch plus a `CLI_FOR_FORGE` entry, not a rewrite.
+
+`forge.kind` is an interview answer and the guard enforces the chosen one:
 with `kind: gitlab, exclusive: true` the `gh` CLI is blocked; with `kind: github` `glab` is blocked;
 with `kind: none` neither is. The rendered CLAUDE.md states the chosen forge's CLI, CI file and the
 rule not to propose the other's CI system. `mirror` names a push-mirror that is not the tracker:
 fetching from it is allowed, opening issues or PRs on it is not.
+
+**The CLI is allowed by read verb, not wholesale** (added 2026-10-01, fix 1.4). `Bash(<cli>:*)`
+pre-approved `mr create`, `mr merge` and `issue close` along with everything else, so an agent could
+open and merge its own merge request without a prompt — while the generated CLAUDE.md tells it that
+outward-facing actions are the user's. `settings.json` now allows only `list`, `view`, `diff`,
+`checks`/`status` and `auth status`, and `pre-bash-guard` denies `create|close|reopen|merge|delete|`
+`approve|revoke|edit|update|note|comment` on `issue|mr|pr|release` with the reason and the remedy:
+put the title, body and target branch in the handoff note. Anything in neither list simply prompts.
 
 ### 6.4 Per-role ownership guard
 
