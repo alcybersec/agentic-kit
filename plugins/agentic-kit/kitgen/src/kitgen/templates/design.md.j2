@@ -18,12 +18,11 @@ This file records design that those documents do not cover, and decisions taken 
 
 Each role in `{{ cfg.spine.strategy }}` §2 owns a boundary. The interfaces between them are recorded
 in `{{ cfg.spine.contracts }}`.
-
 {% for r in roles %}
+
 ### {{ r.name }}
 
 {{ r.description }} Owns {% for p in r.owns %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %}.
 
 _Design notes: to be written by `{{ r.name }}` as the boundary takes shape._
-
 {% endfor %}

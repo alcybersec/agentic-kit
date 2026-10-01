@@ -118,6 +118,7 @@ def test_every_rendered_markdown_is_well_formed(load_fixture):
             if not path.endswith(".md"):
                 continue
             assert "\n\n\n" not in body, (name, path, "stray blank line")
+            assert not body.endswith("\n\n"), (name, path, "trailing blank line")
             lines = body.splitlines()
             for i, line in enumerate(lines):
                 if line.startswith("|"):

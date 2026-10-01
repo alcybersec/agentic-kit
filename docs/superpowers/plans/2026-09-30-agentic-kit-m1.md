@@ -762,6 +762,7 @@ def test_every_rendered_markdown_is_well_formed(load_fixture):
             if not path.endswith(".md"):
                 continue
             assert "\n\n\n" not in body, (name, path, "stray blank line")
+            assert not body.endswith("\n\n"), (name, path, "trailing blank line")
             lines = body.splitlines()
             for i, line in enumerate(lines):
                 if line.startswith("|"):
@@ -1902,14 +1903,13 @@ This file records design that those documents do not cover, and decisions taken 
 
 Each role in `{{ cfg.spine.strategy }}` §2 owns a boundary. The interfaces between them are recorded
 in `{{ cfg.spine.contracts }}`.
-
 {% for r in roles %}
+
 ### {{ r.name }}
 
 {{ r.description }} Owns {% for p in r.owns %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %}.
 
 _Design notes: to be written by `{{ r.name }}` as the boundary takes shape._
-
 {% endfor %}
 ```
 
