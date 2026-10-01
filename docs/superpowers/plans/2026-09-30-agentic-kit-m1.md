@@ -5377,6 +5377,21 @@ git commit -m "feat(hooks): hooks.json wiring with plugin-root script paths"
 
 ## Task 15: The eight universal process skills
 
+> **Amended after implementation.** The committed skills are the authority. Every one opens with the
+> §4.3 inertness line — it reads `.claude/kit.lock.json` from `$CLAUDE_PROJECT_DIR` or the cwd and
+> declines in one line when it is absent or unparseable, with no scaffolding and no path guessing.
+>
+> Step 3b's three reconciliations landed here rather than in M2, and each was verified against the
+> rendered spine: `/risk` names all seven register columns in order; `/handoff`'s
+> `CONTRACTS CHANGED:` line spells out the `### <name> v<N>` heading, the fenced shape block, the
+> `Consumers:` line and the change-log row, and tells a role that does not own the contracts file to put
+> the proposed entry in `NOTES`, mark the task PARTIAL and route it through the Orchestrator; `/new-adr`
+> is Orchestrator-or-`architect` only.
+>
+> The three installer skills (`kit-install`, `kit-retrofit`, `kit-upgrade`) are **M2** and were
+> deliberately not created, so the count test stays at eight. `/plan-status` points at `/kit-upgrade`
+> with a fallback line, exactly as the rendered `CLAUDE.md` already does.
+
 Each reads `.claude/kit.lock.json` and declines when it is absent.
 
 **Files:**

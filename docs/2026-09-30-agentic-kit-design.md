@@ -633,6 +633,16 @@ become permission rules: a floor is an invariant ("the safety tier is append-onl
 
 ### 8.4 Role roster derivation
 
+**Two directories have fixed meanings and must not be assigned carelessly.** `docs/adr/**` is
+deliberately owned by `architect` in every generated roster, which is why `/new-adr` is an
+Orchestrator-or-`architect` skill — no other role can file one, including the veto role whose own §6
+requires an ADR to weaken a floor. `docs/gates/**` must be left **unowned**: `/gate-check` has the veto
+role write `floors.md` and `qa` write `tests.md` into the same bundle, and the per-role guard (§6.4)
+permits that only because an unowned path crosses nobody's boundary. A roster that claimed
+`docs/gates/**` for one role would block every other role from contributing its own dimension, and the
+gate could not be assembled at all. Neither path is a `spine` key, so neither is configurable — the
+skills and the templates both hardcode them, and they agree.
+
 **Test paths need deliberate ownership.** The per-role guard (§6.4) blocks a role from writing a path
 another role owns, so giving one role a broad `tests/**` prevents every other role from writing tests
 — while the kit mandates test-first for logic. Either give each role the test subtree for its own
