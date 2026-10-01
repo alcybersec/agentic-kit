@@ -184,6 +184,7 @@ def verify(manifest: dict[str, str], cfg: KitConfig,
     # the veto role does), and the rows already allow an unowned fallback for
     # devops and qa. See the report for Task 8.
     for line, owner in task_rows:
+        # (veto excluded: the veto-owns-a-path check reports it; avoid a duplicate)
         if (owner in role_names and owner != cfg.veto_role.name
                 and re.search(r"owns per §2(?! or an unowned)", line)):
             if not next(r for r in cfg.roles if r.name == owner).owns:
@@ -195,6 +196,7 @@ def verify(manifest: dict[str, str], cfg: KitConfig,
     # row that has "wired into `<forge.ci>`"; it does not catch a CI path that is
     # unowned (any role may write an unowned path) or a CI row phrased differently.
     ci = cfg.forge.ci
+    # model.py rejects kind "none" with a ci value; this guard is belt-and-braces.
     if cfg.forge.kind != "none" and ci:
         ci_rows = [(l, o) for l, o in task_rows if f"wired into `{ci}`" in l]
         if not ci_rows:
@@ -232,22 +234,36 @@ def verify(manifest: dict[str, str], cfg: KitConfig,
 
     # --- spine / load_order paths -------------------------------------------
     # render() hardcodes its output paths while cfg.spine.* is configurable, so this
-    # is the only check connecting them. With no project_root we cannot inspect the
-    # disk, so the on-disk half is SKIPPED, not failed: spine.inherited names
-    # pre-existing authoritative docs that are deliberately never rendered (§7.1),
-    # and treating "absent from the manifest" as a problem would make every
-    # freshly rendered kit verify dirty.
-    if project_root is not None:
-        for label, value in cfg.spine.items():
-            for p in value if isinstance(value, list) else [value]:
-                if p not in manifest and not (project_root / p).exists():
-                    problems.append(
-                        f"spine.{label} path {p!r} is neither rendered nor present "
-                        f"on disk")
-        for entry in cfg.load_order:
-            p = entry["path"]
-            if p not in manifest and not (project_root / p).exists():
+    # is the only check connecting them.
+    #
+    # Non-inherited paths must be in the manifest: they are rendered, so absence
+    # cannot be intentional and needs no disk access to detect. A project_root
+    # only lets an existing file stand in for a rendered one.
+    #
+    # spine.inherited names pre-existing authoritative docs that are deliberately
+    # never rendered (§7.1), so they are checked ONLY when project_root is given:
+    # with None we cannot inspect the disk, and "absent from the manifest" would
+    # make every clean render verify dirty.
+    inherited = set(cfg.spine["inherited"])
+
+    def _present(p: str) -> bool:
+        return p in manifest or (project_root is not None
+                                 and (project_root / p).exists())
+
+    for label, value in cfg.spine.items():
+        for p in value if isinstance(value, list) else [value]:
+            if p in inherited and project_root is None:
+                continue
+            if not _present(p):
                 problems.append(
-                    f"load_order path {p!r} is neither rendered nor on disk")
+                    f"spine.{label} path {p!r} is neither rendered nor present "
+                    f"on disk")
+    for entry in cfg.load_order:
+        p = entry["path"]
+        if p in inherited and project_root is None:
+            continue
+        if not _present(p):
+            problems.append(
+                f"load_order path {p!r} is neither rendered nor on disk")
 
     return problems

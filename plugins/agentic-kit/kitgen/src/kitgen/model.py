@@ -241,6 +241,14 @@ class KitConfig:
                 f"forge cli {self.forge.cli!r} does not match kind "
                 f"{self.forge.kind!r}; expected {expected!r}")
 
+        if self.forge.kind == "none":
+            for field in ("remote", "ci", "mirror"):
+                if getattr(self.forge, field) is not None:
+                    raise ConfigError(
+                        f"forge.kind is 'none' but forge.{field} is "
+                        f"{getattr(self.forge, field)!r}; a project with no forge has no "
+                        f"remote, no CI file and no mirror")
+
         if self.forge.mirror == self.forge.kind:
             raise ConfigError("forge mirror must differ from forge kind")
 

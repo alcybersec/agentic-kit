@@ -198,3 +198,16 @@ def test_empty_or_malformed_milestone_outline_is_rejected(outline):
     d["milestones"]["outline"] = outline
     with pytest.raises(ConfigError, match="outline"):
         KitConfig.from_dict(d)
+
+
+@pytest.mark.parametrize("field,value", [("remote", "git@h:o/r.git"),
+                                         ("ci", ".github/workflows"),
+                                         ("mirror", "github")])
+def test_forge_none_with_a_remote_ci_or_mirror_is_rejected(field, value):
+    import copy
+    d = copy.deepcopy(MINIMAL)
+    d["forge"] = {"kind": "none", "remote": None, "cli": "none", "ci": None,
+                  "exclusive": False}
+    d["forge"][field] = value
+    with pytest.raises(ConfigError, match=f"forge.{field}"):
+        KitConfig.from_dict(d)
