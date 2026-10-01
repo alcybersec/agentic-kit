@@ -377,3 +377,15 @@ def test_the_write_verb_deny_follows_the_configured_forge(tmp_path):
     assert r.returncode == 0, r.stderr
     r = run_hook(HOOK, bash_payload("glab mr merge 3", p), p)
     assert r.returncode == 2 and "forge is github" in r.stderr
+
+
+def test_an_attribution_line_early_in_a_long_message_is_still_blocked(tmp_path):
+    """The same `pipefail` + `grep -q` race as the stop check, failing the other
+    way: here the pipeline reporting failure means ALLOW, so an attribution line
+    slipped through — about once in seventy under load, and every time the line sits
+    early in a long commit message."""
+    p = make_project(tmp_path, attribution={"mention_assistant_in_commits": False})
+    body = "Co-Authored-By: Claude <noreply@anthropic.com>" + ("\nmore detail." * 20000)
+    r = run_hook(HOOK, bash_payload(f"git commit --only src/a.py -m '{body}'", p), p)
+    assert r.returncode == 2, (r.returncode, r.stderr[:200])
+    assert "attribution" in r.stderr.lower()

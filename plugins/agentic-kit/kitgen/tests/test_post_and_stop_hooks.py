@@ -324,3 +324,38 @@ def test_another_tools_input_does_not_satisfy_the_check(tmp_path):
         {"type": "tool_use", "name": "Write",
          "input": {"file_path": "note.md", "content": NOTE}}]}}])
     assert r.returncode == 2, r.stderr
+
+
+# --- the pipefail/SIGPIPE race ------------------------------------------------
+
+def test_a_note_early_in_a_long_transcript_is_still_accepted(tmp_path):
+    """`printf '%s\\n' "$text" | grep -qE ...` under `set -o pipefail` is a race.
+
+    `grep -q` exits the moment it matches. If `printf` has not finished writing,
+    it dies of SIGPIPE, and `pipefail` makes the whole pipeline report that
+    failure — so the hook reads "no handoff note" and blocks a task that in fact
+    emitted one. Measured at 18 failures in 1200 runs across eight concurrent
+    workers, which is also what made the suite fail roughly one run in three.
+
+    This reproduces it deterministically rather than statistically: the note is
+    the FIRST line and several megabytes follow it, so grep is certain to exit
+    while printf is still writing.
+    """
+    p = make_project(tmp_path)
+    lines = [{"role": "assistant", "content": NOTE}]
+    filler = "x" * 2000
+    lines += [{"role": "assistant", "content": filler} for _ in range(2000)]
+    r = stop(p, lines)
+    assert r.returncode == 0, (
+        f"blocked a transcript whose first line carries the note "
+        f"(exit {r.returncode}, stderr {r.stderr[:200]!r})")
+
+
+def test_a_note_early_in_a_long_last_assistant_message_is_still_accepted(tmp_path):
+    """The same race on the other source: the note arrives in
+    `last_assistant_message` followed by a long closing summary."""
+    p = make_project(tmp_path)
+    msg = NOTE + ("\nand then a very long closing summary. " * 20000)
+    r = run_hook("subagent-stop-check.sh",
+                 {"cwd": str(p), "last_assistant_message": msg}, p)
+    assert r.returncode == 0, (r.returncode, r.stderr[:200])

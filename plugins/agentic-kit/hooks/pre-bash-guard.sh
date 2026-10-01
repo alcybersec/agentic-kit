@@ -262,7 +262,10 @@ done < <(printf '%s\n' "$cmd" | tr ';|&\n()`' '\n')
 
 if [ "$is_commit" -eq 1 ] && [ "$(kit_q '.attribution.mention_assistant_in_commits')" != "true" ]; then
   # Attribution-SHAPED text only; a message may legitimately say "anthropic sdk".
-  if printf '%s\n' "$cmd" | grep -qiE 'co-authored-by:.*(claude|anthropic)|generated (with|by).*(claude|anthropic)|🤖'; then
+  # Herestring, not a pipe: `grep -q` exits on the first match and `pipefail` would
+  # turn the writer's SIGPIPE into a failed pipeline. Here that failed OPEN — an
+  # attribution line slipping through roughly once in seventy under load.
+  if grep -qiE 'co-authored-by:.*(claude|anthropic)|generated (with|by).*(claude|anthropic)|🤖' <<<"$cmd"; then
     kit_deny "Blocked by attribution policy: this project does not name the assistant in commit messages. Remove the Co-Authored-By / 'Generated with' / robot-emoji line and commit again."
   fi
 fi

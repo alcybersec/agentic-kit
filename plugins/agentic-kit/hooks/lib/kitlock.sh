@@ -7,7 +7,18 @@
 #
 # Every guard below ends in `exit 0`, silently: nothing on stdout or stderr.
 #
-# Exports: KIT_LOCK (path), KIT_INPUT (raw stdin), and kit_q() to query the lock.
+# Sets KIT_LOCK (path) and KIT_INPUT (raw stdin) as PLAIN shell variables, plus
+# kit_q()/kit_in() to query them.
+#
+# KIT_INPUT is deliberately NOT exported. An exported variable is copied into every
+# child process's environment, and Linux caps a single environment string at
+# MAX_ARG_STRLEN (32 pages, 131072 bytes): past that, execve fails with E2BIG and
+# EVERY child dies -- including the `jq` these helpers run. The hook then reads an
+# empty command and exits 0, so a payload over ~128 KB silently disarmed the whole
+# guard layer. A long Bash heredoc reaches that, and a verbose subagent's
+# `last_assistant_message` reaches it easily, which made the handoff gate pass
+# precisely for the agents that said the most. Nothing needs it in the environment:
+# every consumer is in this same shell and receives it through a pipe.
 #
 # Path matching (kit_lexnorm, kit_candidates, kit_match_glob):
 #   kit_candidates <file_path> <cwd>   fills KIT_CANDS with project-relative spellings of
@@ -44,7 +55,7 @@ kit_init() {
   # would let a zero-byte lock through as if it were a profile.
   [ "$(jq -r 'type' "$KIT_LOCK" 2>/dev/null)" = "object" ] || kit_bail_ok
 
-  export KIT_INPUT KIT_LOCK
+  export KIT_LOCK   # a short path, and `kit_q` hands it to jq as an argument
 }
 
 # kit_q <jq-filter> — query the lock, empty string when absent

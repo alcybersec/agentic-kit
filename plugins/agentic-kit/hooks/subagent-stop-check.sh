@@ -36,7 +36,12 @@ re='^[[:space:]*#]*TASK [A-Za-z0-9._-]+ (—|–|-) (COMPLETE|PARTIAL|BLOCKED)'
 # format described as "TASK <ID> — ..." does not satisfy it.
 
 msg=$(kit_in '.last_assistant_message | strings')
-if [ -n "$msg" ] && printf '%s\n' "$msg" | grep -qE "$re"; then exit 0; fi
+# A herestring, NOT `printf ... | grep -q`. `grep -q` exits on the first match, and
+# under `set -o pipefail` a `printf` still writing then dies of SIGPIPE and makes the
+# whole pipeline report failure — so the hook read "no note" and blocked a task that
+# had emitted one, at about 1.5% under load and deterministically whenever the note
+# is early in a long message. Fail-closed, on the one gate that validates handoffs.
+if [ -n "$msg" ] && grep -qE "$re" <<<"$msg"; then exit 0; fi
 
 transcript=$(kit_in '.agent_transcript_path | strings')
 { [ -n "$transcript" ] && [ -f "$transcript" ]; } || transcript=$(kit_in '.transcript_path | strings')
@@ -75,7 +80,8 @@ else
               else empty end
           end
       end' "$transcript" 2>/dev/null) || text=""
-  if printf '%s\n' "$text" | grep -qE "$re"; then exit 0; fi
+  # Herestring, for the SIGPIPE reason above.
+  if grep -qE "$re" <<<"$text"; then exit 0; fi
 fi
 
 kit_deny "No handoff note in this subagent's output, so the task is not finished. Run /handoff now and emit the note as plain text, starting a line with: TASK <ID> — COMPLETE (or PARTIAL or BLOCKED), then OUTPUTS: (files changed), TESTS: (the exact command and its last line of output), FLOORS, DOWNSTREAM, NOTES, plus any role-specific lines. A note without a pasted test run is not accepted as evidence."

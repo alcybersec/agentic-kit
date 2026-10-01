@@ -244,6 +244,36 @@ class KitConfig:
                         f"literal path prefixes, so a non-normalised glob would "
                         f"not be detected as overlapping an equivalent one.")
 
+        # `secrets` reaches TWO matchers with different owners: the kit's own hooks,
+        # which are root-anchored and match the whole candidate path, and the
+        # `Read()`/`Edit()` deny rules in settings.json, whose matching is Claude
+        # Code's. They agree while every pattern is written in the `./` form the
+        # schema establishes; a bare `secrets/**` would be root-anchored in the hook
+        # and could match at any depth in the deny rule, so the two layers would be
+        # protecting different sets of files while the profile named one. Rejected
+        # rather than rewritten, for the same reason as `owns` above: a silently
+        # corrected pattern teaches the author nothing.
+        for secret in self.secrets:
+            if not isinstance(secret, str) or not secret.strip():
+                raise ConfigError(
+                    f"secrets entries must be non-empty strings, got {secret!r}: an "
+                    f"empty one renders the deny rule 'Read()'")
+            bad = None
+            if not secret.startswith("./"):
+                bad = ("it does not start with './'. Write './.env', not '.env' or "
+                       "'/abs/.env'; for a secret that can appear at more than one "
+                       "depth write './**/.env'")
+            elif "\\" in secret:
+                bad = "it uses a backslash separator"
+            elif any(seg in ("", ".", "..") for seg in secret[2:].split("/")):
+                bad = "it has an empty, '.' or '..' segment after the './'"
+            if bad:
+                raise ConfigError(
+                    f"secret pattern {secret!r} is not normalised: {bad}. The hooks "
+                    f"match it root-anchored against the whole path while "
+                    f"settings.json hands it to Claude Code's own path matching, and "
+                    f"the two only agree on the './' form.")
+
         names = [r.name for r in self.roles]
         dupes = {n for n in names if names.count(n) > 1}
         if dupes:
