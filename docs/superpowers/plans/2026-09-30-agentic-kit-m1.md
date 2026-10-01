@@ -2091,6 +2091,18 @@ git commit -m "feat(kitgen): docs spine templates, M0-only task graph"
 
 ## Task 8: Cross-reference verifier
 
+> **Amended after review.** The code block below is the first draft; the committed `verify.py` is the
+> authority. §9.1 is the normative check list and had grown five checks past this block. Beyond it the
+> shipped verifier: always requires non-`inherited` spine and `load_order` paths to be in the manifest
+> even with `project_root=None` (the disk half alone is conditional); parses the `CLAUDE.md` agent
+> table and `strategy.md` §2/§11 in both directions, reporting *table not found* rather than passing
+> silently when a layout changes; checks each secret per verb; and reports M0 owners that are absent
+> from the roster, assigned no task, or unknown. `model.py` gained the `milestones.outline` non-empty
+> rule and a `forge.kind: none` coherence rule (no `remote`, `ci` or `mirror`).
+>
+> §9.1's original bullet 5 was **wrong** and is not implemented as worded — see the note in §9.1.
+> Brownfield source-directory coverage is deferred to M2, which has the detection input it needs.
+
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/verify.py`
 - Test: `plugins/agentic-kit/kitgen/tests/test_verify.py`
@@ -2197,15 +2209,32 @@ def test_missing_ci_wiring_row_is_reported(load_fixture):
 
 def test_no_ci_row_is_expected_when_there_is_no_forge(load_fixture):
     cfg = load_fixture("greenfield_prd")
-    assert not any("CI" in p for p in verify(render(cfg), cfg))
+    assert verify(render(cfg), cfg) == []
+
+
+def test_a_forge_none_profile_carrying_a_ci_value_is_rejected_outright(load_fixture):
+    from kitgen.model import ConfigError
+
+    def edit(l):
+        l["forge"]["ci"] = ".github/workflows"
+    with pytest.raises(ConfigError, match="forge.ci"):
+        _variant(load_fixture("greenfield_prd"), edit)
 
 
 def test_missing_role_card_is_reported(load_fixture):
     cfg = load_fixture("python_monolith")
     man = render(cfg)
-    del man[".claude/agents/data.md"]
-    problems = verify(man, cfg)
-    assert any("data" in p and "agents/data.md" in p for p in problems)
+    del man[".claude/agents/architect.md"]  # no handoff_extra: only this check fires
+    assert verify(man, cfg) == [
+        "role 'architect': no .claude/agents/architect.md in the manifest"]
+
+
+def test_missing_role_memory_file_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    del man[".claude/agent-memory/data/MEMORY.md"]
+    assert verify(man, cfg) == [
+        "role 'data': no .claude/agent-memory/data/MEMORY.md in the manifest"]
 
 
 def test_stray_agent_card_is_reported(load_fixture):
@@ -2256,14 +2285,56 @@ def test_handoff_extra_missing_from_the_strategy_table_is_reported(load_fixture)
     assert any("handoff extras" in p and "'data'" in p for p in verify(man, cfg))
 
 
-def test_secret_not_denied_in_settings_is_reported(load_fixture):
+@pytest.mark.parametrize("verb", ["Read", "Edit"])
+def test_secret_not_denied_for_one_verb_is_reported(load_fixture, verb):
     cfg = load_fixture("python_monolith")
     man = render(cfg)
     s = json.loads(man[".claude/settings.json"])
-    s["permissions"]["deny"] = [d for d in s["permissions"]["deny"]
-                                if "./.env" not in d]
+    s["permissions"]["deny"].remove(f"{verb}(./.env)")
     man[".claude/settings.json"] = json.dumps(s)
-    assert any("./.env" in p for p in verify(man, cfg))
+    assert verify(man, cfg) == [
+        f".claude/settings.json: secret './.env' is not denied for {verb}"]
+
+
+def test_strategy_listing_a_role_not_in_the_roster_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = man[s].replace("| `data` |", "| `dta` |", 1)
+    assert "docs/strategy.md §2 lists role 'dta', which is not in roles[]" in verify(man, cfg)
+
+
+def test_m0_table_assigning_nothing_to_a_required_role_is_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = "\n".join(l for l in man[s].splitlines()
+                       if not ("-S1-QA-" in l and l.startswith("|")))
+    assert "docs/strategy.md §11: the M0 table assigns no task to 'qa'" in verify(man, cfg)
+
+
+def test_missing_m0_rows_are_reported(load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    s = cfg.spine["strategy"]
+    man[s] = "\n".join(l for l in man[s].splitlines() if "-S1-" not in l)
+    assert "docs/strategy.md §11: no M0 task rows found" in verify(man, cfg)
+
+
+def test_non_inherited_spine_path_missing_from_the_manifest_is_reported_without_a_root(
+        load_fixture):
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    del man["docs/design.md"]
+    assert verify(man, cfg) == [
+        "spine.design path 'docs/design.md' is neither rendered nor present on disk",
+        "load_order path 'docs/design.md' is neither rendered nor on disk"]
+
+
+def test_inherited_path_missing_everywhere_is_not_reported_without_a_root(load_fixture):
+    cfg = load_fixture("services_layout")
+    assert "docs/PRD.md" not in render(cfg)
+    assert verify(render(cfg), cfg, project_root=None) == []
 
 
 def test_spine_path_neither_rendered_nor_on_disk_is_reported(load_fixture, tmp_path):
