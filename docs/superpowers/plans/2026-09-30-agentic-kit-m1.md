@@ -151,7 +151,17 @@ git commit -m "feat: marketplace and plugin manifests with validation tests"
 
 ## Task 2: `KitConfig` model and the §5.2 constraints
 
-The verifier constraints from the spec live here so a bad profile is rejected before any file is rendered.
+The verifier constraints from the spec live here so a bad profile is rejected before any file is
+rendered.
+
+> **Amended after code review.** The implementation below is the first draft. Six fixes landed on top
+> of it and the committed module is the authority: `_glob_prefix` truncates at the first wildcard
+> metacharacter (`[*?\[{]`) and then back to the last `/`, so a mid-segment wildcard cannot leave a
+> partial segment (`src/a*/x/**` → `src`, not `src/a`); `validate()` checks required keys in `spine`,
+> `toolchain`, `milestones` and `attribution` first; `observability` must be a real boolean rather
+> than being coerced; `veto_role` raises `ConfigError` rather than `StopIteration`; `from_dict` copies
+> every mutable section; and five further negative tests cover the mirror, unknown-kind,
+> missing-key, non-boolean and segment-truncation paths.
 
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/model.py`
@@ -548,7 +558,7 @@ secrets: ["./.env", "./config/secrets.yaml"]
 observability: true
 ```
 
-`services_layout/profile.yaml` — forge `gitlab` with a `github` mirror, seven roles including `frontend`:
+`services_layout/profile.yaml` — forge `gitlab` with a `github` mirror, eight roles including `frontend` and `worker`:
 
 ```yaml
 kit_version: 1.0.0
@@ -657,6 +667,13 @@ def test_render_is_pure_and_deterministic(load_fixture):
     assert render(cfg) == render(cfg)
 
 
+def test_the_lock_is_written_after_the_yaml(load_fixture):
+    """§5.1 reads a yaml newer than the lock as hand-edited drift, and the CLI
+    writes in manifest insertion order -- so a clean render must emit yaml first."""
+    paths = list(render(load_fixture("services_layout")))
+    assert paths.index(".claude/kit.yaml") < paths.index(".claude/kit.lock.json")
+
+
 def test_lock_is_valid_json_matching_the_config(load_fixture):
     cfg = load_fixture("python_monolith")
     lock = json.loads(render(cfg)[".claude/kit.lock.json"])
@@ -673,12 +690,21 @@ def test_claude_md_agent_table_lists_every_role(load_fixture):
 
 
 def test_claude_md_names_only_the_chosen_forge(load_fixture):
+    """The chosen CLI appears as the project's tool. The other CLI may appear ONLY
+    inside the "do not propose" sentence -- naming it there is deliberate, and Task 6
+    asserts the same intent in the deny rules. So test placement, not absence."""
     gl = render(load_fixture("services_layout"))["CLAUDE.md"]
-    assert "glab" in gl and "GitHub Actions" not in gl
+    assert "`glab` for issues" in gl
+    assert "GitHub Actions" in gl and "Do not propose" in gl
+    assert "`glab` for issues" in gl.split("Do not propose")[0]
+
     gh = render(load_fixture("python_monolith"))["CLAUDE.md"]
-    assert "gh " in gh and "glab" not in gh
+    assert "`gh` for issues" in gh
+    assert "GitLab CI" in gh and "`glab`" in gh.split("Do not propose")[1]
+
     none = render(load_fixture("greenfield_prd"))["CLAUDE.md"]
-    assert "glab" not in none and "gh " not in none
+    assert "Forge:" not in none
+    assert "glab" not in none and "`gh`" not in none
 
 
 def test_templates_actually_ship_in_the_installed_package():
@@ -757,9 +783,12 @@ def render(cfg: KitConfig) -> dict[str, str]:
     for template, path in SINGLETONS.items():
         out[path] = env.get_template(template).render(**ctx)
 
+    # Order matters: the CLI writes in insertion order, and §5.1 reads
+    # mtime(kit.yaml) > mtime(kit.lock.json) as hand-edited drift. Emit the yaml
+    # FIRST so the lock is always the newer file on a clean render.
     lock = cfg.to_lock()
-    out[".claude/kit.lock.json"] = json.dumps(lock, indent=2, sort_keys=True) + "\n"
     out[".claude/kit.yaml"] = yaml.safe_dump(lock, sort_keys=False, width=100)
+    out[".claude/kit.lock.json"] = json.dumps(lock, indent=2, sort_keys=True) + "\n"
 
     role_card = env.get_template("role.md.j2")
     memory = env.get_template("MEMORY.md.j2")
@@ -1849,21 +1878,25 @@ def verify(manifest: dict[str, str], cfg: KitConfig,
         if lock != cfg.to_lock():
             problems.append(".claude/kit.lock.json does not match the config it came from")
 
-    for label, path in cfg.spine.items():
-        paths = path if isinstance(path, list) else [path]
-        for p in paths:
-            if p in manifest:
-                continue
-            if project_root is not None and (project_root / p).exists():
-                continue
-            problems.append(
-                f"spine.{label} path {p!r} is neither rendered nor present on disk")
+    # With no project_root we cannot inspect the disk, so the on-disk half of this
+    # check is SKIPPED rather than treated as a failure. spine.inherited names
+    # pre-existing authoritative docs that are deliberately never rendered (§7.1),
+    # so treating "absent from the manifest" as a problem would make every
+    # freshly-rendered kit verify dirty.
+    if project_root is not None:
+        for label, path in cfg.spine.items():
+            paths = path if isinstance(path, list) else [path]
+            for p in paths:
+                if p in manifest or (project_root / p).exists():
+                    continue
+                problems.append(
+                    f"spine.{label} path {p!r} is neither rendered nor present on disk")
 
-    for entry in cfg.load_order:
-        p = entry["path"]
-        if p not in manifest and not (
-                project_root is not None and (project_root / p).exists()):
-            problems.append(f"load_order path {p!r} is neither rendered nor on disk")
+        for entry in cfg.load_order:
+            p = entry["path"]
+            if p not in manifest and not (project_root / p).exists():
+                problems.append(
+                    f"load_order path {p!r} is neither rendered nor on disk")
 
     return problems
 ```
@@ -1886,7 +1919,7 @@ git commit -m "feat(kitgen): cross-reference verifier over rendered manifests"
 
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/cli.py`
-- Create: `plugins/agentic-kit/kitgen/src/kitgen/__init__.py`
+- Modify: `plugins/agentic-kit/kitgen/src/kitgen/__init__.py` (exists from Task 1, currently empty)
 - Test: `plugins/agentic-kit/kitgen/tests/test_cli.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1945,6 +1978,13 @@ def test_invalid_profile_exits_two(tmp_path, capsys):
     bad.write_text("kit_version: 1.0.0\n")
     rc = main(["verify", "--profile", str(bad), "--root", str(tmp_path)])
     assert rc == 2
+
+
+def test_unparseable_yaml_exits_two(tmp_path, capsys):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("kit_version: [1.0.0\n")
+    assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
+    assert "invalid profile" in capsys.readouterr().err
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1974,6 +2014,7 @@ import sys
 from pathlib import Path
 
 import yaml
+from jinja2 import UndefinedError
 
 from .model import ConfigError, KitConfig
 from .render import render
@@ -2004,11 +2045,19 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "rendered_on", None):
             raw["rendered_on"] = args.rendered_on
         cfg = KitConfig.from_dict(raw)
-    except (ConfigError, KeyError, TypeError) as exc:
+    except (ConfigError, KeyError, TypeError, yaml.YAMLError) as exc:
         print(f"invalid profile: {exc}", file=sys.stderr)
         return 2
 
-    manifest = render(cfg)
+    # jinja2.UndefinedError is NOT a ConfigError/KeyError/TypeError subclass, so
+    # without this a profile that passed validation but still trips StrictUndefined
+    # would exit 1 ("verification problems") instead of 2 ("bad profile").
+    try:
+        manifest = render(cfg)
+    except UndefinedError as exc:
+        print(f"invalid profile: template needs a field the profile lacks: {exc}",
+              file=sys.stderr)
+        return 2
 
     if args.cmd == "verify":
         problems = verify(manifest, cfg, project_root=args.root)

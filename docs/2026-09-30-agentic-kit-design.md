@@ -97,6 +97,7 @@ call it. This is what makes the output testable, and what keeps a future MCP wra
 
 ```yaml
 kit_version: 1.0.0                 # the plugin version that last wrote this file
+rendered_on: '2026-09-30'          # ISO date, supplied by the caller -- render() must stay pure (§4.4)
 project:
   name: StudyAIO
   slug: studyaio
@@ -173,7 +174,18 @@ observability: true                # when true, the "ships with the feature" rul
 - Exactly one role MAY carry `veto: true`; if any floors exist, exactly one MUST.
 - `floors` MUST be non-empty.
 - `spine.inherited` paths MUST exist on disk.
-- `forge.cli` MUST match `forge.kind` (`gitlab`→`glab`, `github`→`gh`, `none`→`none`).
+- `forge.cli` MUST match `forge.kind` (`gitlab`→`glab`, `github`→`gh`, `none`→`none`), and
+  `forge.kind` MUST be one of `gitlab`, `github`, `none`.
+- `forge.mirror`, when set, MUST differ from `forge.kind`: a mirror is by definition not the tracker.
+- `spine`, `toolchain`, `milestones` and `attribution` MUST carry all of their keys. A typo here would
+  otherwise survive validation and surface as a Jinja2 `StrictUndefined` failure at render time,
+  which is neither a `ConfigError` nor actionable.
+- `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
+  coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
+- Ownership globs MUST be directory-rooted. Overlap is decided on literal directory prefixes, so a
+  glob whose first segment is wild has no prefix and is treated as overlapping everything: that makes
+  extension-partitioned ownership of a shared tree (`app/**/*.py` vs `app/**/*.tsx`) invalid by
+  design.
 
 ## 6. Plugin contents
 
