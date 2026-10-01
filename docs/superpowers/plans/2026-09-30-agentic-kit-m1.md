@@ -872,6 +872,14 @@ SINGLETONS = {
     "CLAUDE.md.j2": "CLAUDE.md",
 }
 
+# Written on a fresh install and never re-rendered over: see design spec §7.1a.
+# plan/README.md is pure dispatch state after the first task, and adr-0001 stamps
+# the install's date and kit version.
+GENERATE_ONCE = frozenset({
+    "docs/plan/README.md",
+    "docs/adr/0001-adopt-agentic-kit.md",
+})
+
 
 def _env() -> Environment:
     return Environment(
@@ -2302,6 +2310,23 @@ def test_render_writes_the_manifest_to_a_target_tree(tmp_path, capsys):
     assert "CLAUDE.md" in written
 
 
+def test_force_still_keeps_generate_once_files(tmp_path, capsys):
+    """plan/README.md is the dispatch state after the first task, and adr-0001 stamps
+    the install's date and kit version. --force must not restamp an Accepted ADR or
+    delete the record of what has been dispatched."""
+    for p in ("docs", "docs/adr", "docs/plan"):
+        (tmp_path / p).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs/PRD.md").write_text("prd")
+    (tmp_path / "docs/architecture.md").write_text("arch")
+    (tmp_path / "docs/plan/README.md").write_text("MY DISPATCH STATE")
+    (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").write_text("ACCEPTED 2026-01-01")
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--force"])
+    assert rc == 0
+    assert (tmp_path / "docs/plan/README.md").read_text() == "MY DISPATCH STATE"
+    assert (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").read_text() == "ACCEPTED 2026-01-01"
+    assert (tmp_path / "CLAUDE.md").exists()   # everything else still re-rendered
+
+
 def test_render_refuses_to_overwrite_without_force(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs/PRD.md").write_text("prd")
@@ -2363,7 +2388,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'kitgen.cli'`
 ```python
 # plugins/agentic-kit/kitgen/src/kitgen/__init__.py
 from .model import KitConfig
-from .render import render
+from .render import GENERATE_ONCE, render
 from .verify import verify
 
 __all__ = ["ConfigError", "KitConfig", "render", "verify"]
@@ -2450,6 +2475,17 @@ def main(argv: list[str] | None = None) -> int:
         if clashes:
             print(f"refusing to overwrite: {sorted(clashes)}", file=sys.stderr)
             return 3
+    else:
+        # --force still must not clobber these. The plan file IS the dispatch state
+        # after the first task, and ADR 0001 stamps the install's date and kit
+        # version -- re-rendering it restamps an Accepted record with a later
+        # install's facts, falsifying the thing the ADR exists to preserve.
+        frozen = sorted(p for p in GENERATE_ONCE
+                        if p in manifest and (args.out / p).exists())
+        if frozen:
+            print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
+            for p in frozen:
+                del manifest[p]
 
     for path, content in manifest.items():
         target = args.out / path
@@ -3182,6 +3218,15 @@ CASES = [
     ("python_monolith", "backend", ".claude/agents/data.md", True),
     ("python_monolith", "qa", "docs/plan/README.md", True),
     ("services_layout", "devops", "docs/plan/README.md", True),
+    # the rulebook and the register are never an agent's to rewrite
+    ("python_monolith", "backend", "docs/strategy.md", True),
+    ("python_monolith", "safety", "docs/strategy.md", True),
+    ("services_layout", "qa", "docs/risk-register.md", True),
+    # but these stay writable: design invites per-role sections, and the
+    # contract-first rule needs the implementing role to record a contract
+    ("python_monolith", "backend", "docs/design.md", False),
+    ("python_monolith", "backend", "docs/CONTRACTS.md", False),
+    ("python_monolith", "architect", "docs/decisions.md", False),
 ]
 
 
@@ -3316,6 +3361,15 @@ plan=$(jq -r '.spine.plan // empty' "$lock")
 if [ -n "$plan" ] && [ "$rel" = "${plan#./}" ]; then
   deny "Blocked: ${rel} is the Orchestrator's dispatch state. Subagents never edit it -- emit a handoff note with /handoff instead."
 fi
+# A role must not rewrite the rulebook that binds it: strategy.md holds the floors
+# and the ownership map, and the register is the Orchestrator's by its own header.
+for key in strategy risks; do
+  p=$(jq -r --arg k "$key" '.spine[$k] // empty' "$lock")
+  [ -n "$p" ] || continue
+  if [ "$rel" = "${p#./}" ]; then
+    deny "Blocked: ${rel} is the operating model, not an agent's to edit -- changing it would let you widen your own boundary or weaken a floor. Raise it with the Orchestrator."
+  fi
+done
 
 # Owned by me?
 while IFS= read -r pat; do
@@ -4217,6 +4271,7 @@ with fiction. Its shape is fixed by the spec:
 | 2 | Role-roster proposal from facts — always-on four, conditional `data`/`frontend`, domain roles from source directories, ownership globs that partition | proposes JobOps-like rosters for the real trees; partition check green |
 | 3 | `skills/kit-install/SKILL.md` — greenfield: derive the roster from documentation, five-turn interview, floors blocking, render, verify, write, commit | installs into an empty dir holding only a PRD; `/plan-status` and `/next-task` then run |
 | 4 | `skills/kit-retrofit/SKILL.md` — brownfield: preservation rule (existing CLAUDE.md verbatim into `## Project-specific notes`), back-fill Completed from progress docs and git history, `spine.inherited` | retrofits `321_project` in a worktree with its GitLab gotchas present verbatim |
+| 3b | Reconcile the skills with the spine they write into: `/risk`'s seven fields against the register's columns (fixed in the template at Task 7), the `## Current` entry shape that `/handoff`'s `CONTRACTS CHANGED:` line points at, and `/new-adr` being Orchestrator-or-`architect` only since `architect` owns `docs/adr/**` | each skill's target exists in the rendered spine with a defined shape |
 | 4b | Widen `test_exactly_the_expected_skills_are_shipped` to eleven skills. Until then a rendered `CLAUDE.md` and the README reference `/kit-upgrade`, which does not exist yet — harmless, because no real project is installed before M2 | the skills test passes with the three installers present |
 | 5 | `skills/kit-upgrade/SKILL.md` — re-render against the stored profile, diff, present patches, refuse to touch `## Project-specific notes` | a deliberate template change surfaces as a patch; hand-edits survive |
 | 6 | M2 acceptance | `321_project` and `study-helper-project` retrofitted in worktrees; in each, `/plan-status`, `/next-task` and `/gate-check` run against the generated spine; pre-existing CLAUDE.md content verbatim |

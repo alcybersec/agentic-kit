@@ -346,7 +346,21 @@ docs spine, and be switched off within a day. Validated against a 70-case corpus
 fixtures before implementation.
 
 Refused for every role regardless of the map: another role's `agent-memory`, any `.claude/agents/**`
-card, and `spine.plan` (subagents emit a handoff note instead).
+card, `spine.plan` (subagents emit a handoff note instead), and **`spine.strategy` and `spine.risks`**.
+
+Those last two matter for the same reason `settings.json` denies `Edit` on itself: a role agent could
+otherwise rewrite §6 — the floors it is bound by — or its own §2 ownership row, which is
+self-expansion by the shortest possible route. `spine.decisions`, `spine.contracts` and `spine.design`
+stay writable: `design.md` invites per-role sections, and the contract-first rule requires the
+implementing role to record a contract before building against it.
+
+A project-wide `Edit` deny in `settings.json` is the wrong instrument for this, because the
+Orchestrator legitimately writes the dispatch state, the register and the §11 expansions. Only a
+role-scoped guard can distinguish them.
+
+**Who may author an ADR.** `architect` owns `docs/adr/**` in every generated roster, so no other role
+can file one — including the veto role, whose own §6 requires an ADR to weaken a floor. `/new-adr` is
+therefore an Orchestrator-or-`architect` skill, and §6 says so rather than leaving it to be discovered.
 
 **Not registered on the orchestrator**, which owns no paths and legitimately writes the dispatch
 state, the risk register and the gate bundles.
@@ -393,6 +407,22 @@ derived from `secrets` plus the destructive set, and `CLAUDE_CODE_MAX_SUBAGENT_S
 
 Pre-existing authoritative documentation (a PRD, an architecture doc, a technical plan) is recorded
 in `spine.inherited` and **referenced** by `docs/design.md`, never restated or edited.
+
+### 7.1a Which spine documents may be re-rendered
+
+`/kit-upgrade` (M2) re-renders templates and diffs them against the repo, so each spine document needs
+a classification before that is written, not after:
+
+| Document | Class |
+|---|---|
+| `strategy.md` §1–§10 | **stable scaffolding** — every line derives from the profile; safe to re-render and diff |
+| `strategy.md` §11 | **mixed** — §1–§10 regenerate, the task graph is hand-expanded at gate time |
+| `design.md`, `decisions.md`, `CONTRACTS.md`, `risk-register.md` | **living** — generated headings only; the content below them is hand-written and a diff is noise |
+| `plan/README.md` | **generate-once** — it is pure state after the first task, so a re-render *deletes* the dispatch record |
+| `adr/0001-adopt-agentic-kit.md` | **generate-once** — it stamps `rendered_on` and `kit_version`; re-rendering restamps an *Accepted* ADR with a later install's date, falsifying the record it exists to preserve |
+
+`kitgen` therefore declares a `GENERATE_ONCE` set beside `SINGLETONS`, and the CLI refuses to overwrite
+anything in it without `--force`.
 
 ### 7.2 Brownfield preservation rule (normative)
 
@@ -501,7 +531,14 @@ Runs against a rendered manifest, before anything is written:
 - Every role named as an owner in the strategy §11 task table exists in `roles[]`. The M0 table names
   `architect`, `devops`, `qa` and the veto role, so a profile missing one renders a task assigned to
   nobody.
-- The veto role owns at least one path. A veto role owning nothing cannot build the floor tier that
+- The veto role owns at least one path.
+- `milestones.outline` is non-empty. `strategy.md` and `plan/README.md` both index `outline[0]`, so an
+  empty list surfaces as a Jinja `UndefinedError` rather than a `ConfigError` — the exact failure mode
+  §5.2 exists to prevent.
+- The role that owns `forge.ci` is the role the CI-wiring task row names, and every role named in the
+  §11 M0 table either owns a test path or no role owns one. Both encode the same lesson: a generated
+  task row that instructs a write the assigned role cannot make is unexecutable, and it was found
+  twice by rendering rather than by any test. A veto role owning nothing cannot build the floor tier that
   the M0 gate requires — and if every test path belongs to another role, the ownership guard (§6.4)
   blocks that task outright, which is why §11's M0 entry conditions make the tier's home an explicit
   decision rather than an assumption.
