@@ -31,6 +31,14 @@ SINGLETONS = {
     "adr-0001.md.j2": "docs/adr/0001-adopt-agentic-kit.md",
 }
 
+# Written on a fresh install and never re-rendered over: see design spec §7.1a.
+# plan/README.md is pure dispatch state after the first task, and adr-0001 stamps
+# the install's date and kit version.
+GENERATE_ONCE = frozenset({
+    "docs/plan/README.md",
+    "docs/adr/0001-adopt-agentic-kit.md",
+})
+
 
 def _env() -> Environment:
     return Environment(

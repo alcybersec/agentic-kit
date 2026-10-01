@@ -171,3 +171,16 @@ def test_no_template_placeholder_survives_rendering(load_fixture):
         for path, body in render(load_fixture(name)).items():
             if path.endswith((".md", ".yaml")):
                 assert "{{" not in body and "{%" not in body, (name, path)
+
+
+def test_render_module_contract():
+    """SINGLETONS and GENERATE_ONCE are referenced by the CLI and by M2's upgrade
+    skill, so pin them here. The plan's Task 4 block once declared GENERATE_ONCE while
+    the committed module lacked it, which nothing caught."""
+    from kitgen.render import GENERATE_ONCE, SINGLETONS
+    assert len(SINGLETONS) == 10, sorted(SINGLETONS)
+    assert GENERATE_ONCE == {
+        "docs/plan/README.md",
+        "docs/adr/0001-adopt-agentic-kit.md",
+    }
+    assert GENERATE_ONCE <= set(SINGLETONS.values())

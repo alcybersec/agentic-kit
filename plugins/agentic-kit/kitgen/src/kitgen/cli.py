@@ -1,0 +1,107 @@
+# plugins/agentic-kit/kitgen/src/kitgen/cli.py
+"""kitgen CLI. Exit codes: 0 ok, 1 verification problems, 2 bad profile, 3 refused.
+
+Consumers invoke it without kitgen on PATH, via the plugin cache:
+
+    uv run --project "${CLAUDE_PLUGIN_ROOT}/kitgen" kitgen render --profile <p> --out <dir>
+
+--project builds its venv under the plugin cache on first use; a read-only plugin
+cache is a real failure mode to report, not to fall back from silently.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import yaml
+from jinja2 import UndefinedError
+
+from .model import KitConfig
+from .render import GENERATE_ONCE, render
+from .verify import verify
+
+HOOKS_PREFIX = ".claude/hooks/"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="kitgen")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("render", help="render a profile into a project tree")
+    r.add_argument("--profile", type=Path, required=True)
+    r.add_argument("--out", type=Path, required=True)
+    r.add_argument("--rendered-on", default=None,
+                   help="ISO date recorded in the kit; defaults to the profile's value")
+    r.add_argument("--dry-run", action="store_true")
+    r.add_argument("--force", action="store_true",
+                   help="overwrite generated files (generate-once files are still kept)")
+
+    v = sub.add_parser("verify", help="verify a rendered kit against its profile")
+    v.add_argument("--profile", type=Path, required=True)
+    v.add_argument("--root", type=Path, required=True)
+
+    args = parser.parse_args(argv)
+
+    try:
+        raw = yaml.safe_load(args.profile.read_text())
+        if getattr(args, "rendered_on", None):
+            raw["rendered_on"] = args.rendered_on
+        cfg = KitConfig.from_dict(raw)
+        manifest = render(cfg)
+    except (ValueError, KeyError, TypeError, AttributeError, OSError,
+            yaml.YAMLError, UndefinedError) as exc:
+        # Deliberately broad: this block only loads and validates a profile and
+        # renders it, so any of these means a bad profile. ValueError subsumes
+        # ConfigError; UndefinedError is a template needing a field the profile
+        # lacks. An uncaught exception would exit 1, which the calling skill reads
+        # as "verification problems" -- a materially wrong diagnosis.
+        print(f"invalid profile: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+    if args.cmd == "verify":
+        problems = verify(manifest, cfg, project_root=args.root)
+        for p in problems:
+            print(p)
+        return 1 if problems else 0
+
+    if args.dry_run:
+        print(json.dumps({"manifest": sorted(manifest)}, indent=2))
+        return 0
+
+    # Verify BEFORE touching the filesystem: a half-written kit is worse than none.
+    problems = verify(manifest, cfg, project_root=args.out)
+    if problems:
+        for p in problems:
+            print(p, file=sys.stderr)
+        return 1
+
+    if not args.force:
+        clashes = [p for p in manifest if (args.out / p).exists()]
+        if clashes:
+            print(f"refusing to overwrite: {sorted(clashes)}", file=sys.stderr)
+            return 3
+    else:
+        # --force still must not clobber these. The plan file IS the dispatch state
+        # after the first task, and ADR 0001 stamps the install's date and kit
+        # version -- re-rendering it restamps an Accepted record with a later
+        # install's facts, falsifying the thing the ADR exists to preserve.
+        frozen = sorted(p for p in GENERATE_ONCE
+                        if p in manifest and (args.out / p).exists())
+        if frozen:
+            print(f"keeping existing generate-once files: {frozen}", file=sys.stderr)
+            for p in frozen:
+                del manifest[p]
+
+    # Manifest insertion order is the write order: kit.yaml before kit.lock.json
+    # (spec 5.1 reads mtime(kit.yaml) > mtime(lock) as drift). Do not sort.
+    for path, content in manifest.items():
+        target = args.out / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+        if path.startswith(HOOKS_PREFIX):
+            target.chmod(target.stat().st_mode | 0o111)   # hooks are inert unless +x
+
+    print(json.dumps({"written": list(manifest)}, indent=2))
+    return 0
