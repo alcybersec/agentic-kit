@@ -326,9 +326,12 @@ known, tested set of spellings it does not catch:
 | `cat "$(echo .e)nv"` | the path is constructed at run time — unfixable in principle |
 | `git commit -F msg.txt` | the hook does not read file contents |
 
-And one false positive it accepts in exchange: `echo 'a; git add -A'` is blocked, because the segmenter
-is not quote-aware. Making it quote-aware means writing a shell parser in a `PreToolUse` hook, which
-costs more than it buys given this layer is not a containment boundary.
+And one false positive it accepts in exchange: `echo "a; git stash now"` is blocked, because the
+segmenter is not quote-aware and sees `git stash now` after the `;`. Note `echo 'a; git add -A'`
+happens to pass, but only by luck — the closing quote sticks to the last word, making it `-A'` — so
+the escape is an accident of spelling, not a rule. Making the segmenter quote-aware means writing a
+shell parser inside a `PreToolUse` hook, which costs more than it buys for a layer that is not a
+containment boundary.
 
 These are pinned by `test_known_matcher_limits`, which asserts the *current* behaviour so that closing
 one becomes a deliberate decision rather than an accident, and so nobody reads the list above as

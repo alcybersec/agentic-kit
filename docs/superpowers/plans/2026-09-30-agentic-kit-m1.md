@@ -3324,7 +3324,9 @@ kit_init() {
 
   KIT_LOCK="$root/.claude/kit.lock.json"
   [ -f "$KIT_LOCK" ] || kit_bail_ok
-  jq -e 'type == "object"' "$KIT_LOCK" >/dev/null 2>&1 || kit_bail_ok
+  # Compare the output: `jq -e` exits 0 on an EMPTY file (no input, no output), which
+  # would let a zero-byte lock through as if it were a profile.
+  [ "$(jq -r 'type' "$KIT_LOCK" 2>/dev/null)" = "object" ] || kit_bail_ok
 
   export KIT_INPUT KIT_LOCK
 }
@@ -3452,6 +3454,19 @@ def file_payload(tool: str, file_path: str, cwd: Path) -> dict:
 
 ## Task 11: `pre-bash-guard`
 
+> **Amended after implementation.** The committed hook is the authority. Beyond the draft it also
+> blocks `git checkout -- .`/`git checkout .`/`git restore .`/`git clean`/`git push --delete`/`-d`/
+> `origin :branch` — all listed in §6.2's deny set, so the two enforcement layers now agree — and peels
+> wrapper **flag arguments** (`sudo -u bob rm -rf /x` was read as the binary `bob`). The secret scan no
+> longer reads commit-message text, and the attribution check matches attribution-*shaped* text only
+> (`Co-Authored-By:`, `Generated with/by`, 🤖) rather than the words `claude`/`anthropic` anywhere.
+>
+> Also fixed in Task 10's `kitlock.sh`: `jq -e 'type=="object"'` exits **0** on a zero-byte file, so an
+> empty lock would have put a behaving hook live with every profile field empty. Invisible while the
+> hooks were stubs.
+>
+> `test_known_matcher_limits` pins the spellings this hook deliberately does **not** catch — see §6.2.
+
 **Files:**
 - Modify: `plugins/agentic-kit/hooks/pre-bash-guard.sh`
 - Test: `plugins/agentic-kit/kitgen/tests/test_pre_bash_guard.py`
@@ -3489,6 +3504,7 @@ def make_project(tmp_path, secrets=None, **overrides):
     "git add --all",
     "git commit -a -m wip",
     "git commit -am wip",
+    'git commit -am "wip"',
     "git stash",
     "git stash pop",
 ])
@@ -3501,9 +3517,12 @@ def test_staging_sweeps_are_blocked(tmp_path, command):
 
 @pytest.mark.parametrize("command", [
     "git commit --only src/a.py -m 'feat: a'",
+    "git commit --only src/a.py -m 'fix the -a flag handling'",
     "git add src/a.py",
+    "git add -p src/a.py",
     "git status",
     "git diff --cached",
+    "git push --force-with-lease origin topic",
 ])
 def test_explicit_path_operations_are_allowed(tmp_path, command):
     p = make_project(tmp_path)
@@ -3512,12 +3531,33 @@ def test_explicit_path_operations_are_allowed(tmp_path, command):
 
 @pytest.mark.parametrize("command", [
     "rm -rf build",
+    "rm -fr build",
+    "rm -r -f build",
     "git push --force origin main",
     "git push -f",
+    "git push origin +main",
     "git reset --hard HEAD~1",
     "docker compose down -v",
+    "docker-compose down --volumes",
 ])
 def test_destructive_commands_are_blocked(tmp_path, command):
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == 2, command
+
+
+@pytest.mark.parametrize("command", [
+    "git  add  -A",
+    "git add --all .",
+    "GIT_DIR=x git add -A",
+    "git -C /other add -A",
+    "env git stash",
+    "sudo rm -rf /x",
+    "echo $(git add -A)",
+    "make && git add -A",
+    "make | git add -A",
+    "/usr/bin/git add -A",
+])
+def test_spellings_of_a_blocked_command_are_blocked(tmp_path, command):
     p = make_project(tmp_path)
     assert run_hook(HOOK, bash_payload(command, p), p).returncode == 2, command
 
@@ -3527,11 +3567,23 @@ def test_the_other_forge_cli_is_blocked_when_exclusive(tmp_path):
     r = run_hook(HOOK, bash_payload("gh pr create", p), p)
     assert r.returncode == 2
     assert "glab" in r.stderr
+    for spelling in ["/usr/bin/gh pr list", "GH_TOKEN=x gh pr list", "ls && gh pr list"]:
+        assert run_hook(HOOK, bash_payload(spelling, p), p).returncode == 2, spelling
 
 
 def test_the_chosen_forge_cli_is_allowed(tmp_path):
     p = make_project(tmp_path)
     assert run_hook(HOOK, bash_payload("glab mr list", p), p).returncode == 0
+
+
+def test_github_projects_block_glab_and_allow_gh(tmp_path):
+    p = make_project(tmp_path, forge={"kind": "github", "cli": "gh",
+                                      "exclusive": True, "mirror": None,
+                                      "remote": "git@h:o/r.git", "ci": None})
+    r = run_hook(HOOK, bash_payload("glab mr list", p), p)
+    assert r.returncode == 2
+    assert "gh" in r.stderr
+    assert run_hook(HOOK, bash_payload("gh pr list", p), p).returncode == 0
 
 
 def test_neither_cli_is_blocked_when_forge_is_none(tmp_path):
@@ -3542,12 +3594,108 @@ def test_neither_cli_is_blocked_when_forge_is_none(tmp_path):
     assert run_hook(HOOK, bash_payload("glab mr list", p), p).returncode == 0
 
 
+def test_a_non_exclusive_forge_blocks_neither_cli(tmp_path):
+    p = make_project(tmp_path, forge={"kind": "gitlab", "cli": "glab",
+                                      "exclusive": False, "mirror": "github",
+                                      "remote": "git@h:o/r.git", "ci": ".gitlab-ci.yml"})
+    assert run_hook(HOOK, bash_payload("gh pr list", p), p).returncode == 0
+    assert run_hook(HOOK, bash_payload("glab mr list", p), p).returncode == 0
+
+
 def test_assistant_attribution_in_a_commit_message_is_blocked(tmp_path):
     p = make_project(tmp_path)
     cmd = "git commit --only a.py -m 'feat: x\n\nCo-Authored-By: Claude <x@y>'"
     r = run_hook(HOOK, bash_payload(cmd, p), p)
     assert r.returncode == 2
     assert "attribution" in r.stderr.lower()
+    for blocked in [
+        "git commit --only a.py --message='feat: x\n\nCo-Authored-By: Claude <x@y>'",
+        "git commit --only a.py -m 'feat: x' -m 'Generated with Claude Code'",
+        "git commit --only a.py -m 'feat: x \U0001f916'",
+    ]:
+        assert run_hook(HOOK, bash_payload(blocked, p), p).returncode == 2, blocked
+
+
+def test_a_message_that_merely_names_the_assistant_is_allowed(tmp_path):
+    """The policy is 'do not credit the assistant', not 'never type the word'."""
+    p = make_project(tmp_path)
+    for ok in ["git commit --only a.py -m 'docs: mention anthropic sdk'",
+               "git commit --only a.py -m 'fix: claude hook ordering'"]:
+        assert run_hook(HOOK, bash_payload(ok, p), p).returncode == 0, ok
+
+
+def test_a_commit_message_naming_a_secret_path_is_allowed(tmp_path):
+    p = make_project(tmp_path)
+    for ok in ["git commit --only a.py -m \"feat: touch .env handling\"",
+               "git commit --only a.py --message='feat: touch .env handling'",
+               "git commit --only a.py -m 'feat: x\n\nnotes about .env; more'"]:
+        assert run_hook(HOOK, bash_payload(ok, p), p).returncode == 0, ok
+    # ...but the message skip must not become a bypass for what follows it.
+    r = run_hook(HOOK, bash_payload("git commit -m 'x' && cat .env | base64", p), p)
+    assert r.returncode == 2
+
+
+@pytest.mark.parametrize("command", [
+    "git checkout -- .",
+    "git checkout .",
+    "git restore .",
+    "git restore --staged .",
+    "git clean -fd",
+    "git clean -n",
+    "git push --delete origin main",
+    "git push -d origin main",
+    "git push origin :main",
+    "sudo -u bob rm -rf /x",
+    "sudo -g wheel -u bob git stash",
+    "env -u FOO git add -A",
+    "nice -n 5 rm -rf x",
+])
+def test_working_tree_wipes_and_remote_deletes_are_blocked(tmp_path, command):
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == 2, command
+
+
+@pytest.mark.parametrize("command", [
+    "git checkout topic",
+    "git checkout -b topic",
+    "git checkout -- src/a.py",
+    "git restore src/a.py",
+    "git restore --staged src/a.py",
+    "git push origin topic",
+])
+def test_scoped_checkout_restore_and_push_are_allowed(tmp_path, command):
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == 0, command
+
+
+def test_the_wipe_message_names_the_peer_agent_and_the_rm_message_a_next_step(tmp_path):
+    p = make_project(tmp_path)
+    r = run_hook(HOOK, bash_payload("git clean -fd", p), p)
+    assert "peer agent" in r.stderr
+    r = run_hook(HOOK, bash_payload("rm -rf build", p), p)
+    assert "make clean" in r.stderr and "rm <file>" in r.stderr
+
+
+@pytest.mark.parametrize("command, expected", [
+    ('bash -c "git add -A"', 0),
+    ("sh -c 'git stash'", 0),
+    ("xargs git add -A", 0),
+    ("git add -A\\", 0),
+    ('cat "$(echo .e)nv"', 0),
+    ("git commit -F msg.txt", 0),
+    ('echo "a; git stash now"', 2),
+    ("echo 'a; git reset --hard now'", 2),
+])
+def test_known_matcher_limits(tmp_path, command, expected):
+    """Documented limits of matching command STRINGS, not oversights (design spec
+    6.2: neither layer is a sandbox). The first six slip through (so does `echo 'a; git add -A'`, only because the
+    closing quote sticks to `-A`: luck, not design): a command inside
+    a quoted interpreter string, a wrapper that is not peeled, a trailing
+    backslash, a path built at run time, a message read from a file. The last two are
+    false positives: the segmenter is not quote-aware. This pins CURRENT behaviour;
+    if one changes, decide deliberately and update 6.2."""
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == expected, command
 
 
 def test_attribution_is_allowed_when_the_profile_permits_it(tmp_path):
@@ -3602,88 +3750,260 @@ Expected: FAIL — every blocking test returns 0 (the stub allows everything)
 #!/usr/bin/env bash
 # PreToolUse/Bash guard. Makes the atomic-commit, destructive-command and
 # forge-exclusivity rules executable instead of advisory.
+#
+# Matches COMMAND STRINGS, so it is not a sandbox (design spec 6.2): it stops
+# reflexive mistakes by a cooperative agent, not a determined one.
 set -uo pipefail
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/kitlock.sh"
+set -f   # never let an unquoted word expand as a pathname glob
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
 cmd=$(kit_in '.tool_input.command')
 [ -n "$cmd" ] || exit 0
 
-# Only inspect the git/docker/forge words that actually start a command or follow
-# a shell separator, so a command merely *mentioning* a rule is not blocked.
-segments=$(printf '%s' "$cmd" | tr ';|&\n' '\n')
-
-while IFS= read -r seg; do
-  seg="${seg#"${seg%%[![:space:]]*}"}"   # ltrim
-  [ -n "$seg" ] || continue
-
-  case "$seg" in
-    "git add -A"*|"git add --all"*|"git add ."|"git add . "*)
-      kit_deny "Blocked: staging sweeps absorb other agents' work. Commit explicit paths with 'git commit --only <path>'." ;;
-    "git commit -a"*|"git commit --all"*|"git commit -am"*)
-      kit_deny "Blocked: 'git commit -a' commits whatever is staged. Use 'git commit --only <path> -m ...'." ;;
-    "git stash"*)
-      kit_deny "Blocked: restoring a stash has itself leaked a peer agent's working tree into a commit. If foreign files appear in git status, stop and report to the Orchestrator." ;;
-    "rm -rf"*|"rm -fr"*)
-      kit_deny "Blocked: 'rm -rf'. Delete named paths, and ask the user for anything broader." ;;
-    "git push --force"*|"git push -f"*)
-      kit_deny "Blocked: force push. Ask the user; a force push can destroy a peer session's commits." ;;
-    "git reset --hard"*)
-      kit_deny "Blocked: 'git reset --hard' discards uncommitted work that may not be yours." ;;
-    "docker compose down -v"*|"docker-compose down -v"*)
-      kit_deny "Blocked: '-v' deletes named volumes, i.e. the data. Use 'docker compose down' alone." ;;
+forge_kind=$(kit_q '.forge.kind')
+forge_cli=$(kit_q '.forge.cli')
+exclusive=$(kit_q '.forge.exclusive')
+other=""
+if [ "$exclusive" = "true" ]; then
+  case "$forge_kind" in
+    gitlab) other="gh" ;;
+    github) other="glab" ;;
   esac
-done <<< "$segments"
+fi
+
+ONLY="Commit explicit paths with 'git add <path>' and 'git commit --only <path> -m ...'."
+skipq=""    # closing quote we are waiting for inside a commit message
+is_commit=0
+
+# Does a (possibly quote-opening) value leave a quote unterminated?
+qopen() {
+  local v="$1" q="${1:0:1}"
+  case "$q" in
+    \"|\') if [ "${#v}" -eq 1 ] || [ "${v: -1}" != "$q" ]; then skipq="$q"; fi ;;
+  esac
+}
+
+# Words of a `git commit` that are NOT message text, for the secret scan: a message
+# that names `.env` is discussing it, not reading it.
+have_kept=0
+kept=""
+
+check_commit() {
+  local a expect=0 i c
+  have_kept=1
+  for a in "$@"; do
+    if [ -n "$skipq" ]; then
+      case "$a" in *"$skipq") skipq="" ;; esac
+      continue
+    fi
+    if [ "$expect" -eq 1 ]; then expect=0; qopen "$a"; continue; fi
+    kept+=" $a"
+    case "$a" in
+      --all) kit_deny "Blocked: 'git commit --all' commits whatever is modified, including other sessions' files. $ONLY" ;;
+      --message|--file|--author|--date|--template|--reuse-message|--reedit-message) expect=1 ;;
+      --*=*) kept="${kept% "$a"} ${a%%=*}"; qopen "${a#*=}" ;;
+      --*) ;;
+      -?*)
+        for ((i = 1; i < ${#a}; i++)); do
+          c="${a:i:1}"
+          case "$c" in
+            a) kit_deny "Blocked: 'git commit -a' commits whatever is modified, including other sessions' files. $ONLY" ;;
+            m|F|C|c|t)
+              kept="${kept% "$a"} ${a:0:i+1}"
+              if [ $((i + 1)) -lt ${#a} ]; then qopen "${a:i+1}"; else expect=1; fi
+              break ;;
+          esac
+        done ;;
+    esac
+  done
+}
+
+check_segment() {
+  local -a w
+  read -ra w <<< "$1"
+  local i=0 n=${#w[@]}
+  # Peel env assignments and transparent wrappers off the front.
+  while [ "$i" -lt "$n" ]; do
+    if [[ "${w[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then i=$((i + 1)); continue; fi
+    case "${w[i]##*/}" in
+      sudo|env|command|exec|nohup|time|nice|builtin)
+        local wrapper="${w[i]##*/}"
+        i=$((i + 1))
+        while [ "$i" -lt "$n" ] && [[ "${w[i]}" == -* ]]; do
+          # Flags that take their argument as the NEXT word: it is not the command.
+          case "$wrapper:${w[i]}" in
+            sudo:-u|sudo:-g|sudo:-C|sudo:-h|sudo:-p|sudo:-r|sudo:-t|sudo:-U|sudo:-D|sudo:-R|sudo:-T|sudo:--user|sudo:--group|sudo:--host|sudo:--prompt|sudo:--role|sudo:--type|sudo:--chdir|sudo:--close-from \
+            |env:-u|env:--unset|env:-C|env:--chdir|env:-S|env:--split-string \
+            |nice:-n|nice:--adjustment|time:-f|time:--format|time:-o|time:--output)
+              i=$((i + 1)) ;;
+          esac
+          i=$((i + 1))
+        done ;;
+      *) break ;;
+    esac
+  done
+  [ "$i" -lt "$n" ] || return 0
+  local bin="${w[i]##*/}"
+  local -a args=("${w[@]:i+1}")
+
+  if [ -n "$other" ] && [ "$bin" = "$other" ]; then
+    kit_deny "Blocked: this project's forge is ${forge_kind}; use '${forge_cli}', not '${other}'."
+  fi
+
+  local a
+  case "$bin" in
+    git)
+      # Skip git's global options: -C <dir>, -c <k=v>, --git-dir=..., --no-pager.
+      while [ "${#args[@]}" -gt 0 ]; do
+        case "${args[0]}" in
+          -C|-c|--git-dir|--work-tree|--namespace) args=("${args[@]:2}") ;;
+          -*) args=("${args[@]:1}") ;;
+          *) break ;;
+        esac
+      done
+      [ "${#args[@]}" -gt 0 ] || return 0
+      local sub="${args[0]}"; args=("${args[@]:1}")
+      case "$sub" in
+        add)
+          for a in "${args[@]}"; do
+            case "$a" in
+              -A|--all|.|./|-[!-]*A*)
+                kit_deny "Blocked: 'git add ${a}' stages every change in the tree, including other sessions' files. $ONLY" ;;
+            esac
+          done ;;
+        commit) is_commit=1; check_commit "${args[@]}" ;;
+        stash)
+          kit_deny "Blocked: 'git stash' -- restoring a stash has itself leaked a peer agent's working tree into a commit. If foreign files appear in git status, stop and report to the Orchestrator; otherwise commit your own paths with 'git commit --only <path>'." ;;
+        push)
+          for a in "${args[@]}"; do
+            case "$a" in
+              --delete|-d|:*)
+                kit_deny "Blocked: deleting a remote branch ('${a}') cannot be undone from here and may remove a peer session's work. Ask the user to do it." ;;
+              --force|-f|+*|-[!-]*f*)
+                kit_deny "Blocked: force push ('${a}'). It can destroy a peer session's commits. Ask the user, or use --force-with-lease, which refuses when the remote has moved." ;;
+            esac
+          done ;;
+        checkout|restore)
+          for a in "${args[@]}"; do
+            case "$a" in
+              .|./)
+                kit_deny "Blocked: 'git ${sub} ${a}' overwrites every modified file in the shared checkout, including a peer agent's uncommitted work, with no way back. Restore only the specific file you own ('git ${sub} -- <path>'), or ask the user." ;;
+            esac
+          done ;;
+        clean)
+          kit_deny "Blocked: 'git clean' deletes untracked files, which on a shared checkout include a peer agent's new, uncommitted work, with no way back. Delete the specific paths you created, or ask the user." ;;
+        reset)
+          for a in "${args[@]}"; do
+            [ "$a" = "--hard" ] && kit_deny "Blocked: 'git reset --hard' discards uncommitted work that may not be yours. Use 'git restore <path>' on a file you own, or ask the user."
+          done ;;
+      esac ;;
+    rm)
+      local rec=0 frc=0
+      for a in "${args[@]}"; do
+        case "$a" in
+          --recursive) rec=1 ;;
+          --force) frc=1 ;;
+          --*) ;;
+          -?*) case "$a" in *r*|*R*) rec=1 ;; esac
+               case "$a" in *f*) frc=1 ;; esac ;;
+        esac
+      done
+      if [ "$rec" -eq 1 ] && [ "$frc" -eq 1 ]; then
+        kit_deny "Blocked: recursive forced 'rm' ('rm -rf') cannot be undone. Delete the specific paths with 'rm <file>' (or 'rm -r <dir>' without -f), or, for a build artefact, use the project's clean target (e.g. 'make clean'). Ask the user for anything broader."
+      fi ;;
+    docker|docker-compose)
+      local sawdown=0 vol=0
+      if [ "$bin" = "docker" ] && [ "${args[0]:-}" != "compose" ]; then return 0; fi
+      for a in "${args[@]}"; do
+        case "$a" in
+          down) sawdown=1 ;;
+          --volumes|-v) vol=1 ;;
+        esac
+      done
+      if [ "$sawdown" -eq 1 ] && [ "$vol" -eq 1 ]; then
+        kit_deny "Blocked: 'compose down -v' deletes named volumes, i.e. the data. Use 'docker compose down' alone."
+      fi ;;
+  esac
+}
 
 # Read/Edit denies already cover the file commands Claude Code recognizes in Bash
 # (cat, head, tail, sed, tee) and redirection targets. This check is for the
 # REMAINDER: readers it does not recognize (xxd, base64, strings) and interpreters.
 #
 # Match per WORD, anchored. An unanchored substring match over the whole command
-# would block `cat .env.example` and `cp .env.example .env` -- the very remediation
-# the deny message recommends.
-for word in $cmd; do
-  w="${word%\"}"; w="${w#\"}"; w="${w%\'}"; w="${w#\'}"; w="${w#./}"
-  [ -n "$w" ] || continue
-  while IFS= read -r pattern; do
-    [ -n "$pattern" ] || continue
-    pat="${pattern#./}"
-    # shellcheck disable=SC2254  # the pattern is a glob on purpose
-    case "$w" in
-      $pat)
-        kit_deny "Blocked: this command names ${pattern}, a secret path in .claude/kit.yaml. Never read or print it; use the .example template instead." ;;
-    esac
-  done < <(jq -r '.secrets[]? // empty' "$KIT_LOCK")
-done
+# would block `cat .env.example` -- and a per-word match alone would still block
+# `cp .env.example .env`, whose destination word IS the secret path. That copy is
+# the remediation the deny message recommends, so a template-to-secret `cp` is
+# exempted explicitly (it reads nothing secret).
+mapfile -t secrets < <(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
+root="${KIT_LOCK%/.claude/kit.lock.json}"
 
-forge_kind=$(kit_q '.forge.kind')
-forge_cli=$(kit_q '.forge.cli')
-exclusive=$(kit_q '.forge.exclusive')
-
-if [ "$exclusive" = "true" ] && [ "$forge_kind" != "none" ]; then
-  case "$forge_kind" in
-    gitlab) other="gh" ;;
-    github) other="glab" ;;
-    *)      other="" ;;
-  esac
-  if [ -n "$other" ]; then
-    while IFS= read -r seg; do
-      seg="${seg#"${seg%%[![:space:]]*}"}"
-      case "$seg" in
-        "$other"|"$other "*)
-          kit_deny "Blocked: this project's forge is ${forge_kind}; use '${forge_cli}', not '${other}'." ;;
-      esac
-    done <<< "$segments"
+check_secrets() {
+  [ "${#secrets[@]}" -gt 0 ] || return 0
+  local -a w ops=()
+  read -ra w <<< "$1"
+  if [ "${w[0]##*/}" = "cp" ]; then
+    local x
+    for x in "${w[@]:1}"; do [[ "$x" == -* ]] || ops+=("$x"); done
+    if [ "${#ops[@]}" -eq 2 ]; then
+      case "${ops[0]}" in *.example|*.sample|*.template|*.dist) return 0 ;; esac
+    fi
   fi
-fi
+  local word tok pattern pat
+  while IFS= read -r word; do
+    tok="$word"
+    while :; do
+      case "$tok" in
+        ./*) tok="${tok#./}" ;;
+        "$root"/*) tok="${tok#"$root"/}" ;;
+        *) break ;;
+      esac
+    done
+    [ -n "$tok" ] || continue
+    for pattern in "${secrets[@]}"; do
+      pat="${pattern#./}"
+      [ -n "$pat" ] || continue
+      # shellcheck disable=SC2254  # the pattern is a glob on purpose
+      case "$tok" in
+        $pat)
+          kit_deny "Blocked: this command names '${pattern}', a secret path in this project's kit lock. Never read, copy or print it; if you need its shape, read the .example template instead." ;;
+      esac
+    done
+  done < <(printf '%s\n' "$1" | tr -s ' \t\n"'"'"'()=,;|&<>`' '\n')
+}
 
-if [ "$(kit_q '.attribution.mention_assistant_in_commits')" != "true" ]; then
-  case "$cmd" in
-    "git commit"*|*" git commit"*)
-      if printf '%s' "$cmd" | grep -qiE 'claude|anthropic|co-authored-by:[^\n]*claude'; then
-        kit_deny "Blocked by attribution policy: this project does not name the assistant in commit messages."
-      fi ;;
-  esac
+# Segment on ; | & newline ( ) and backtick, so a command merely *mentions* a
+# rule inside an argument is not blocked, while $(...) and && chains are inspected.
+while IFS= read -r seg; do
+  # A commit message can span segments (newlines, `;`, parens inside the quotes).
+  # While one is open, drop its words, through the one that closes it.
+  if [ -n "$skipq" ]; then
+    read -ra mw <<< "$seg"
+    seg=""; closed=0
+    for x in "${mw[@]}"; do
+      if [ "$closed" -eq 0 ]; then
+        case "$x" in *"$skipq") skipq=""; closed=1 ;; esac
+      else
+        seg+=" $x"
+      fi
+    done
+  fi
+  [ -n "${seg//[[:space:]]/}" ] || continue
+  have_kept=0; kept=""
+  check_segment "$seg"
+  if [ "$have_kept" -eq 1 ]; then check_secrets "git commit$kept"; else check_secrets "$seg"; fi
+done < <(printf '%s\n' "$cmd" | tr ';|&\n()`' '\n')
+
+if [ "$is_commit" -eq 1 ] && [ "$(kit_q '.attribution.mention_assistant_in_commits')" != "true" ]; then
+  # Attribution-SHAPED text only; a message may legitimately say "anthropic sdk".
+  if printf '%s\n' "$cmd" | grep -qiE 'co-authored-by:.*(claude|anthropic)|generated (with|by).*(claude|anthropic)|🤖'; then
+    kit_deny "Blocked by attribution policy: this project does not name the assistant in commit messages. Remove the Co-Authored-By / 'Generated with' / robot-emoji line and commit again."
+  fi
 fi
 
 exit 0
@@ -3698,7 +4018,266 @@ Expected: PASS — 34 passed (22 guard cases plus the 12 inertness cases still g
 
 ```bash
 git add plugins/agentic-kit/hooks/pre-bash-guard.sh plugins/agentic-kit/kitgen/tests/test_pre_bash_guard.py
-git commit -m "feat(hooks): pre-bash-guard enforcing atomic commits and forge exclusivity"
+#!/usr/bin/env bash
+# PreToolUse/Bash guard. Makes the atomic-commit, destructive-command and
+# forge-exclusivity rules executable instead of advisory.
+#
+# Matches COMMAND STRINGS, so it is not a sandbox (design spec 6.2): it stops
+# reflexive mistakes by a cooperative agent, not a determined one.
+set -uo pipefail
+set -f   # never let an unquoted word expand as a pathname glob
+# Resolve the library relative to this script, not ${CLAUDE_PLUGIN_ROOT}: under
+# `set -u` an unset variable would error before the inertness check could run.
+_kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_dir=.
+# shellcheck source=lib/kitlock.sh
+source "$_kit_dir/lib/kitlock.sh" || exit 0
+kit_init
+
+cmd=$(kit_in '.tool_input.command')
+[ -n "$cmd" ] || exit 0
+
+forge_kind=$(kit_q '.forge.kind')
+forge_cli=$(kit_q '.forge.cli')
+exclusive=$(kit_q '.forge.exclusive')
+other=""
+if [ "$exclusive" = "true" ]; then
+  case "$forge_kind" in
+    gitlab) other="gh" ;;
+    github) other="glab" ;;
+  esac
+fi
+
+ONLY="Commit explicit paths with 'git add <path>' and 'git commit --only <path> -m ...'."
+skipq=""    # closing quote we are waiting for inside a commit message
+is_commit=0
+
+# Does a (possibly quote-opening) value leave a quote unterminated?
+qopen() {
+  local v="$1" q="${1:0:1}"
+  case "$q" in
+    \"|\') if [ "${#v}" -eq 1 ] || [ "${v: -1}" != "$q" ]; then skipq="$q"; fi ;;
+  esac
+}
+
+# Words of a `git commit` that are NOT message text, for the secret scan: a message
+# that names `.env` is discussing it, not reading it.
+have_kept=0
+kept=""
+
+check_commit() {
+  local a expect=0 i c
+  have_kept=1
+  for a in "$@"; do
+    if [ -n "$skipq" ]; then
+      case "$a" in *"$skipq") skipq="" ;; esac
+      continue
+    fi
+    if [ "$expect" -eq 1 ]; then expect=0; qopen "$a"; continue; fi
+    kept+=" $a"
+    case "$a" in
+      --all) kit_deny "Blocked: 'git commit --all' commits whatever is modified, including other sessions' files. $ONLY" ;;
+      --message|--file|--author|--date|--template|--reuse-message|--reedit-message) expect=1 ;;
+      --*=*) kept="${kept% "$a"} ${a%%=*}"; qopen "${a#*=}" ;;
+      --*) ;;
+      -?*)
+        for ((i = 1; i < ${#a}; i++)); do
+          c="${a:i:1}"
+          case "$c" in
+            a) kit_deny "Blocked: 'git commit -a' commits whatever is modified, including other sessions' files. $ONLY" ;;
+            m|F|C|c|t)
+              kept="${kept% "$a"} ${a:0:i+1}"
+              if [ $((i + 1)) -lt ${#a} ]; then qopen "${a:i+1}"; else expect=1; fi
+              break ;;
+          esac
+        done ;;
+    esac
+  done
+}
+
+check_segment() {
+  local -a w
+  read -ra w <<< "$1"
+  local i=0 n=${#w[@]}
+  # Peel env assignments and transparent wrappers off the front.
+  while [ "$i" -lt "$n" ]; do
+    if [[ "${w[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then i=$((i + 1)); continue; fi
+    case "${w[i]##*/}" in
+      sudo|env|command|exec|nohup|time|nice|builtin)
+        local wrapper="${w[i]##*/}"
+        i=$((i + 1))
+        while [ "$i" -lt "$n" ] && [[ "${w[i]}" == -* ]]; do
+          # Flags that take their argument as the NEXT word: it is not the command.
+          case "$wrapper:${w[i]}" in
+            sudo:-u|sudo:-g|sudo:-C|sudo:-h|sudo:-p|sudo:-r|sudo:-t|sudo:-U|sudo:-D|sudo:-R|sudo:-T|sudo:--user|sudo:--group|sudo:--host|sudo:--prompt|sudo:--role|sudo:--type|sudo:--chdir|sudo:--close-from \
+            |env:-u|env:--unset|env:-C|env:--chdir|env:-S|env:--split-string \
+            |nice:-n|nice:--adjustment|time:-f|time:--format|time:-o|time:--output)
+              i=$((i + 1)) ;;
+          esac
+          i=$((i + 1))
+        done ;;
+      *) break ;;
+    esac
+  done
+  [ "$i" -lt "$n" ] || return 0
+  local bin="${w[i]##*/}"
+  local -a args=("${w[@]:i+1}")
+
+  if [ -n "$other" ] && [ "$bin" = "$other" ]; then
+    kit_deny "Blocked: this project's forge is ${forge_kind}; use '${forge_cli}', not '${other}'."
+  fi
+
+  local a
+  case "$bin" in
+    git)
+      # Skip git's global options: -C <dir>, -c <k=v>, --git-dir=..., --no-pager.
+      while [ "${#args[@]}" -gt 0 ]; do
+        case "${args[0]}" in
+          -C|-c|--git-dir|--work-tree|--namespace) args=("${args[@]:2}") ;;
+          -*) args=("${args[@]:1}") ;;
+          *) break ;;
+        esac
+      done
+      [ "${#args[@]}" -gt 0 ] || return 0
+      local sub="${args[0]}"; args=("${args[@]:1}")
+      case "$sub" in
+        add)
+          for a in "${args[@]}"; do
+            case "$a" in
+              -A|--all|.|./|-[!-]*A*)
+                kit_deny "Blocked: 'git add ${a}' stages every change in the tree, including other sessions' files. $ONLY" ;;
+            esac
+          done ;;
+        commit) is_commit=1; check_commit "${args[@]}" ;;
+        stash)
+          kit_deny "Blocked: 'git stash' -- restoring a stash has itself leaked a peer agent's working tree into a commit. If foreign files appear in git status, stop and report to the Orchestrator; otherwise commit your own paths with 'git commit --only <path>'." ;;
+        push)
+          for a in "${args[@]}"; do
+            case "$a" in
+              --delete|-d|:*)
+                kit_deny "Blocked: deleting a remote branch ('${a}') cannot be undone from here and may remove a peer session's work. Ask the user to do it." ;;
+              --force|-f|+*|-[!-]*f*)
+                kit_deny "Blocked: force push ('${a}'). It can destroy a peer session's commits. Ask the user, or use --force-with-lease, which refuses when the remote has moved." ;;
+            esac
+          done ;;
+        checkout|restore)
+          for a in "${args[@]}"; do
+            case "$a" in
+              .|./)
+                kit_deny "Blocked: 'git ${sub} ${a}' overwrites every modified file in the shared checkout, including a peer agent's uncommitted work, with no way back. Restore only the specific file you own ('git ${sub} -- <path>'), or ask the user." ;;
+            esac
+          done ;;
+        clean)
+          kit_deny "Blocked: 'git clean' deletes untracked files, which on a shared checkout include a peer agent's new, uncommitted work, with no way back. Delete the specific paths you created, or ask the user." ;;
+        reset)
+          for a in "${args[@]}"; do
+            [ "$a" = "--hard" ] && kit_deny "Blocked: 'git reset --hard' discards uncommitted work that may not be yours. Use 'git restore <path>' on a file you own, or ask the user."
+          done ;;
+      esac ;;
+    rm)
+      local rec=0 frc=0
+      for a in "${args[@]}"; do
+        case "$a" in
+          --recursive) rec=1 ;;
+          --force) frc=1 ;;
+          --*) ;;
+          -?*) case "$a" in *r*|*R*) rec=1 ;; esac
+               case "$a" in *f*) frc=1 ;; esac ;;
+        esac
+      done
+      if [ "$rec" -eq 1 ] && [ "$frc" -eq 1 ]; then
+        kit_deny "Blocked: recursive forced 'rm' ('rm -rf') cannot be undone. Delete the specific paths with 'rm <file>' (or 'rm -r <dir>' without -f), or, for a build artefact, use the project's clean target (e.g. 'make clean'). Ask the user for anything broader."
+      fi ;;
+    docker|docker-compose)
+      local sawdown=0 vol=0
+      if [ "$bin" = "docker" ] && [ "${args[0]:-}" != "compose" ]; then return 0; fi
+      for a in "${args[@]}"; do
+        case "$a" in
+          down) sawdown=1 ;;
+          --volumes|-v) vol=1 ;;
+        esac
+      done
+      if [ "$sawdown" -eq 1 ] && [ "$vol" -eq 1 ]; then
+        kit_deny "Blocked: 'compose down -v' deletes named volumes, i.e. the data. Use 'docker compose down' alone."
+      fi ;;
+  esac
+}
+
+# Read/Edit denies already cover the file commands Claude Code recognizes in Bash
+# (cat, head, tail, sed, tee) and redirection targets. This check is for the
+# REMAINDER: readers it does not recognize (xxd, base64, strings) and interpreters.
+#
+# Match per WORD, anchored. An unanchored substring match over the whole command
+# would block `cat .env.example` -- and a per-word match alone would still block
+# `cp .env.example .env`, whose destination word IS the secret path. That copy is
+# the remediation the deny message recommends, so a template-to-secret `cp` is
+# exempted explicitly (it reads nothing secret).
+mapfile -t secrets < <(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
+root="${KIT_LOCK%/.claude/kit.lock.json}"
+
+check_secrets() {
+  [ "${#secrets[@]}" -gt 0 ] || return 0
+  local -a w ops=()
+  read -ra w <<< "$1"
+  if [ "${w[0]##*/}" = "cp" ]; then
+    local x
+    for x in "${w[@]:1}"; do [[ "$x" == -* ]] || ops+=("$x"); done
+    if [ "${#ops[@]}" -eq 2 ]; then
+      case "${ops[0]}" in *.example|*.sample|*.template|*.dist) return 0 ;; esac
+    fi
+  fi
+  local word tok pattern pat
+  while IFS= read -r word; do
+    tok="$word"
+    while :; do
+      case "$tok" in
+        ./*) tok="${tok#./}" ;;
+        "$root"/*) tok="${tok#"$root"/}" ;;
+        *) break ;;
+      esac
+    done
+    [ -n "$tok" ] || continue
+    for pattern in "${secrets[@]}"; do
+      pat="${pattern#./}"
+      [ -n "$pat" ] || continue
+      # shellcheck disable=SC2254  # the pattern is a glob on purpose
+      case "$tok" in
+        $pat)
+          kit_deny "Blocked: this command names '${pattern}', a secret path in this project's kit lock. Never read, copy or print it; if you need its shape, read the .example template instead." ;;
+      esac
+    done
+  done < <(printf '%s\n' "$1" | tr -s ' \t\n"'"'"'()=,;|&<>`' '\n')
+}
+
+# Segment on ; | & newline ( ) and backtick, so a command merely *mentions* a
+# rule inside an argument is not blocked, while $(...) and && chains are inspected.
+while IFS= read -r seg; do
+  # A commit message can span segments (newlines, `;`, parens inside the quotes).
+  # While one is open, drop its words, through the one that closes it.
+  if [ -n "$skipq" ]; then
+    read -ra mw <<< "$seg"
+    seg=""; closed=0
+    for x in "${mw[@]}"; do
+      if [ "$closed" -eq 0 ]; then
+        case "$x" in *"$skipq") skipq=""; closed=1 ;; esac
+      else
+        seg+=" $x"
+      fi
+    done
+  fi
+  [ -n "${seg//[[:space:]]/}" ] || continue
+  have_kept=0; kept=""
+  check_segment "$seg"
+  if [ "$have_kept" -eq 1 ]; then check_secrets "git commit$kept"; else check_secrets "$seg"; fi
+done < <(printf '%s\n' "$cmd" | tr ';|&\n()`' '\n')
+
+if [ "$is_commit" -eq 1 ] && [ "$(kit_q '.attribution.mention_assistant_in_commits')" != "true" ]; then
+  # Attribution-SHAPED text only; a message may legitimately say "anthropic sdk".
+  if printf '%s\n' "$cmd" | grep -qiE 'co-authored-by:.*(claude|anthropic)|generated (with|by).*(claude|anthropic)|🤖'; then
+    kit_deny "Blocked by attribution policy: this project does not name the assistant in commit messages. Remove the Co-Authored-By / 'Generated with' / robot-emoji line and commit again."
+  fi
+fi
+
+exit 0
 ```
 
 ---
