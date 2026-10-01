@@ -15,6 +15,7 @@ root="${CLAUDE_PROJECT_DIR:-$PWD}"
 plugin="${BASH_SOURCE[0]%/*}/.."
 lock="$root/.claude/kit.lock.json"
 fails=0
+probe=""
 tmp=$(mktemp -d) || { echo "kit-doctor: cannot create a temporary directory"; exit 1; }
 trap 'rm -rf "$tmp"' EXIT
 
@@ -63,7 +64,12 @@ run_guard() {
     return
   fi
   local out rc
-  out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$root" bash "$script" "$@" 2>&1)
+  # A herestring, not `printf | bash`. A guard that refuses early exits without
+  # draining stdin, the writer then dies of SIGPIPE, and `pipefail` would report 141
+  # instead of the guard's own 2 -- turning a correct refusal into "neither allow nor
+  # block", at random, under load. The same idiom cost the stop-check gate a false
+  # block; see hooks/lib/kitlock.sh.
+  out=$(CLAUDE_PROJECT_DIR="$root" bash "$script" "$@" <<<"$payload" 2>&1)
   rc=$?
   case "$rc" in
     2) if [ -n "${out//[[:space:]]/}" ]; then
@@ -103,9 +109,10 @@ elif ! command -v "${fmt%% *}" >/dev/null 2>&1; then
 else
   # A real, deliberately unformatted file, so a formatter that runs leaves a mark.
   printf 'x = [1,2]\n' > "$tmp/probe.py"
-  out=$(jq -nc --arg c "$root" --arg p "$tmp/probe.py" \
-          '{tool_name:"Edit",tool_input:{file_path:$p},cwd:$c}' \
-        | CLAUDE_PROJECT_DIR="$root" bash "$plugin/hooks/post-edit-format.sh" 2>&1)
+  probe=$(jq -nc --arg c "$root" --arg p "$tmp/probe.py" \
+            '{tool_name:"Edit",tool_input:{file_path:$p},cwd:$c}')
+  out=$(CLAUDE_PROJECT_DIR="$root" bash "$plugin/hooks/post-edit-format.sh" \
+          <<<"$probe" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ] || [ -n "${out//[[:space:]]/}" ]; then
     bad "post-edit-format" "must exit 0 silently; got exit $rc, output: ${out%%$'\n'*}"

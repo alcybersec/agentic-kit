@@ -31,7 +31,10 @@ def test_no_short_circuiting_consumer_on_the_right_of_a_pipe(path):
     for n, line in enumerate(body.splitlines(), 1):
         if line.lstrip().startswith("#"):
             continue
-        if re.search(r"\|\s*(grep\s+(-\w*q|-m\s*\d)|head\b)", line):
+        # `bash <script>` belongs here too: a guard that refuses exits without
+        # draining stdin, so the writer takes a SIGPIPE and the pipeline reports 141
+        # instead of the guard's own exit code.
+        if re.search(r"\|\s*(\w+=\S+\s+)*(grep\s+(-\w*q|-m\s*\d)|head\b|bash\b)", line):
             pytest.fail(f"{path.name}:{n}: short-circuiting consumer after a pipe "
                         f"under pipefail — use a herestring: {line.strip()}")
 
