@@ -2495,6 +2495,17 @@ git commit -m "feat(kitgen): cross-reference verifier over rendered manifests"
 
 ## Task 9: CLI
 
+> **Amended after implementation.** The blocks below are the first draft; the committed files are the
+> authority. The shipped CLI catches `OSError` and `AttributeError` as well — a missing profile file
+> raises `FileNotFoundError`, which would otherwise have exited 1 and been read by the installing
+> skill as "verification problems" rather than "bad profile". `__init__.py` imports `ConfigError`
+> (the draft listed it in `__all__` without importing it) and also exports `GENERATE_ONCE`. Profile
+> loading and rendering share one `try` block. `written` is emitted in manifest order rather than
+> sorted, so the output shows the real write order.
+>
+> Verified by driving the CLI directly: exit 1 leaves **zero** files on disk, exit 3 leaves the tree
+> untouched, and `--force` re-renders `CLAUDE.md` while preserving both `GENERATE_ONCE` paths.
+
 **Files:**
 - Create: `plugins/agentic-kit/kitgen/src/kitgen/cli.py`
 - Modify: `plugins/agentic-kit/kitgen/src/kitgen/__init__.py` (exists from Task 1, currently empty)
@@ -2539,6 +2550,7 @@ def test_render_module_contract():
 ```python
 # plugins/agentic-kit/kitgen/tests/test_cli.py
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -2548,10 +2560,18 @@ from kitgen.cli import main
 FIXTURE = Path(__file__).parent / "fixtures/services_layout/profile.yaml"
 
 
+def _seed_spine(root: Path) -> None:
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / "docs/PRD.md").write_text("prd")
+    (root / "docs/architecture.md").write_text("arch")
+
+
+def _tree(root: Path) -> set[str]:
+    return {str(p.relative_to(root)) for p in root.rglob("*")}
+
+
 def test_render_writes_the_manifest_to_a_target_tree(tmp_path, capsys):
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs/PRD.md").write_text("prd")
-    (tmp_path / "docs/architecture.md").write_text("arch")
+    _seed_spine(tmp_path)
     rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)])
     assert rc == 0
     assert (tmp_path / "CLAUDE.md").exists()
@@ -2565,10 +2585,9 @@ def test_force_still_keeps_generate_once_files(tmp_path, capsys):
     """plan/README.md is the dispatch state after the first task, and adr-0001 stamps
     the install's date and kit version. --force must not restamp an Accepted ADR or
     delete the record of what has been dispatched."""
-    for p in ("docs", "docs/adr", "docs/plan"):
+    _seed_spine(tmp_path)
+    for p in ("docs/adr", "docs/plan"):
         (tmp_path / p).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "docs/PRD.md").write_text("prd")
-    (tmp_path / "docs/architecture.md").write_text("arch")
     (tmp_path / "docs/plan/README.md").write_text("MY DISPATCH STATE")
     (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").write_text("ACCEPTED 2026-01-01")
     rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--force"])
@@ -2576,16 +2595,34 @@ def test_force_still_keeps_generate_once_files(tmp_path, capsys):
     assert (tmp_path / "docs/plan/README.md").read_text() == "MY DISPATCH STATE"
     assert (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").read_text() == "ACCEPTED 2026-01-01"
     assert (tmp_path / "CLAUDE.md").exists()   # everything else still re-rendered
+    written = json.loads(capsys.readouterr().out)["written"]
+    assert "docs/plan/README.md" not in written
 
 
-def test_render_refuses_to_overwrite_without_force(tmp_path):
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs/PRD.md").write_text("prd")
-    (tmp_path / "docs/architecture.md").write_text("arch")
+def test_force_writes_generate_once_files_when_absent(tmp_path):
+    """--force protects existing history; it must not leave a fresh install without them."""
+    _seed_spine(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--force"]) == 0
+    assert (tmp_path / "docs/plan/README.md").exists()
+    assert (tmp_path / "docs/adr/0001-adopt-agentic-kit.md").exists()
+
+
+def test_render_refuses_to_overwrite_without_force(tmp_path, capsys):
+    _seed_spine(tmp_path)
     (tmp_path / "CLAUDE.md").write_text("existing")
     rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)])
     assert rc == 3
     assert (tmp_path / "CLAUDE.md").read_text() == "existing"
+    assert "refusing to overwrite" in capsys.readouterr().err
+
+
+def test_refusal_writes_nothing_else(tmp_path):
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("existing")
+    before = _tree(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 3
+    assert _tree(tmp_path) == before
 
 
 def test_dry_run_writes_nothing_and_prints_the_manifest(tmp_path, capsys):
@@ -2594,6 +2631,37 @@ def test_dry_run_writes_nothing_and_prints_the_manifest(tmp_path, capsys):
     assert rc == 0
     assert not (tmp_path / "CLAUDE.md").exists()
     assert "CLAUDE.md" in json.loads(capsys.readouterr().out)["manifest"]
+
+
+def test_verification_failure_writes_nothing(tmp_path, capsys):
+    """Verify BEFORE writing. The spine docs are absent, so verify() fails; a
+    half-written kit is worse than none, so the tree must be left untouched."""
+    before = _tree(tmp_path)
+    rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)])
+    assert rc == 1
+    assert "docs/PRD.md" in capsys.readouterr().err
+    assert _tree(tmp_path) == before == set()
+
+
+def test_lock_is_written_after_kit_yaml(tmp_path):
+    """Spec 5.1: mtime(kit.yaml) > mtime(kit.lock.json) means hand-edited drift, so a
+    clean install must leave the lock at least as new as the yaml."""
+    _seed_spine(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
+    y = (tmp_path / ".claude/kit.yaml").stat().st_mtime_ns
+    l = (tmp_path / ".claude/kit.lock.json").stat().st_mtime_ns
+    assert l >= y
+
+
+def test_hook_scripts_are_executable(tmp_path, capsys):
+    """Every manifest path under .claude/hooks/ must be executable once written.
+    VACUOUS today: render() emits no hook yet (Task 12b adds ownership-guard.sh),
+    so this asserts over an empty set. It becomes meaningful when 12b lands."""
+    _seed_spine(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
+    written = json.loads(capsys.readouterr().out)["written"]
+    for rel in (p for p in written if p.startswith(".claude/hooks/")):
+        assert os.access(tmp_path / rel, os.X_OK), rel
 
 
 def test_verify_reports_problems_and_exits_nonzero(tmp_path, capsys):
@@ -2620,13 +2688,24 @@ def test_a_scalar_where_a_mapping_belongs_exits_two(tmp_path, capsys):
     """Regression: this path raised a bare ValueError from dict(), which is not a
     ConfigError, so it escaped the handler and exited 1 instead of 2."""
     import yaml as _yaml
-    raw = _yaml.safe_load(
-        (Path(__file__).parent / "fixtures/services_layout/profile.yaml").read_text())
+    raw = _yaml.safe_load(FIXTURE.read_text())
     raw["spine"] = "docs/strategy.md"
     bad = tmp_path / "bad.yaml"
     bad.write_text(_yaml.safe_dump(raw))
     assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
     assert "spine" in capsys.readouterr().err
+
+
+def test_hook_chmod_is_exercised_with_a_synthetic_hook(tmp_path, monkeypatch):
+    """Non-vacuous companion to the test above: inject a hook into the manifest."""
+    import kitgen.cli as cli
+    real = cli.render
+    monkeypatch.setattr(cli, "render", lambda cfg: {
+        **real(cfg), ".claude/hooks/ownership-guard.sh": "#!/bin/sh\nexit 0\n"})
+    _seed_spine(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
+    assert os.access(tmp_path / ".claude/hooks/ownership-guard.sh", os.X_OK)
+    assert not os.access(tmp_path / "CLAUDE.md", os.X_OK)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2638,16 +2717,24 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'kitgen.cli'`
 
 ```python
 # plugins/agentic-kit/kitgen/src/kitgen/__init__.py
-from .model import KitConfig
+from .model import ConfigError, KitConfig
 from .render import GENERATE_ONCE, render
 from .verify import verify
 
-__all__ = ["ConfigError", "KitConfig", "render", "verify"]
+__all__ = ["ConfigError", "GENERATE_ONCE", "KitConfig", "render", "verify"]
 ```
 
 ```python
 # plugins/agentic-kit/kitgen/src/kitgen/cli.py
-"""kitgen CLI. Exit codes: 0 ok, 1 verification problems, 2 bad profile, 3 refused."""
+"""kitgen CLI. Exit codes: 0 ok, 1 verification problems, 2 bad profile, 3 refused.
+
+Consumers invoke it without kitgen on PATH, via the plugin cache:
+
+    uv run --project "${CLAUDE_PLUGIN_ROOT}/kitgen" kitgen render --profile <p> --out <dir>
+
+--project builds its venv under the plugin cache on first use; a read-only plugin
+cache is a real failure mode to report, not to fall back from silently.
+"""
 from __future__ import annotations
 
 import argparse
@@ -2658,9 +2745,11 @@ from pathlib import Path
 import yaml
 from jinja2 import UndefinedError
 
-from .model import ConfigError, KitConfig
-from .render import render
+from .model import KitConfig
+from .render import GENERATE_ONCE, render
 from .verify import verify
+
+HOOKS_PREFIX = ".claude/hooks/"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2674,7 +2763,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="ISO date recorded in the kit; defaults to the profile's value")
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--force", action="store_true",
-                   help="overwrite files that already exist")
+                   help="overwrite generated files (generate-once files are still kept)")
 
     v = sub.add_parser("verify", help="verify a rendered kit against its profile")
     v.add_argument("--profile", type=Path, required=True)
@@ -2687,22 +2776,15 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "rendered_on", None):
             raw["rendered_on"] = args.rendered_on
         cfg = KitConfig.from_dict(raw)
-    except (ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
-        # ValueError subsumes ConfigError. It is deliberately broad: this block only
-        # loads and validates a profile, so any ValueError raised inside it means a
-        # bad profile. A bare ValueError is NOT a ConfigError, and leaving it uncaught
-        # exits 1 ("verification problems") instead of 2 ("bad profile").
-        print(f"invalid profile: {exc}", file=sys.stderr)
-        return 2
-
-    # jinja2.UndefinedError is NOT a ConfigError/KeyError/TypeError subclass, so
-    # without this a profile that passed validation but still trips StrictUndefined
-    # would exit 1 ("verification problems") instead of 2 ("bad profile").
-    try:
         manifest = render(cfg)
-    except UndefinedError as exc:
-        print(f"invalid profile: template needs a field the profile lacks: {exc}",
-              file=sys.stderr)
+    except (ValueError, KeyError, TypeError, AttributeError, OSError,
+            yaml.YAMLError, UndefinedError) as exc:
+        # Deliberately broad: this block only loads and validates a profile and
+        # renders it, so any of these means a bad profile. ValueError subsumes
+        # ConfigError; UndefinedError is a template needing a field the profile
+        # lacks. An uncaught exception would exit 1, which the calling skill reads
+        # as "verification problems" -- a materially wrong diagnosis.
+        print(f"invalid profile: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
     if args.cmd == "verify":
@@ -2715,6 +2797,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"manifest": sorted(manifest)}, indent=2))
         return 0
 
+    # Verify BEFORE touching the filesystem: a half-written kit is worse than none.
     problems = verify(manifest, cfg, project_root=args.out)
     if problems:
         for p in problems:
@@ -2738,12 +2821,16 @@ def main(argv: list[str] | None = None) -> int:
             for p in frozen:
                 del manifest[p]
 
+    # Manifest insertion order is the write order: kit.yaml before kit.lock.json
+    # (spec 5.1 reads mtime(kit.yaml) > mtime(lock) as drift). Do not sort.
     for path, content in manifest.items():
         target = args.out / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
+        if path.startswith(HOOKS_PREFIX):
+            target.chmod(target.stat().st_mode | 0o111)   # hooks are inert unless +x
 
-    print(json.dumps({"written": sorted(manifest)}, indent=2))
+    print(json.dumps({"written": list(manifest)}, indent=2))
     return 0
 ```
 
