@@ -498,6 +498,13 @@ Runs against a rendered manifest, before anything is written:
 - `settings.json` deny entries cover every `secrets` path.
 - Every `load_order` and `spine` path is either rendered in this manifest or exists on disk.
 - Exactly one veto role; `floors` non-empty.
+- Every role named as an owner in the strategy §11 task table exists in `roles[]`. The M0 table names
+  `architect`, `devops`, `qa` and the veto role, so a profile missing one renders a task assigned to
+  nobody.
+- The veto role owns at least one path. A veto role owning nothing cannot build the floor tier that
+  the M0 gate requires — and if every test path belongs to another role, the ownership guard (§6.4)
+  blocks that task outright, which is why §11's M0 entry conditions make the tier's home an explicit
+  decision rather than an assumption.
 
 ### 9.2 Renderer tests
 

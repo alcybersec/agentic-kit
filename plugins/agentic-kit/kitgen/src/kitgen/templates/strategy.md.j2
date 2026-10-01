@@ -94,6 +94,9 @@ work is invented work.
 - [ ] The user has reviewed {% if cfg.spine.inherited %}{% for p in cfg.spine.inherited %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} and {% endif %}this file.
 - [ ] The role roster in §2 is accepted.
 - [ ] The floors in §6 are accepted.
+- [ ] The floor test tier has a home that `{{ veto.name }}` owns in §2. If every test path belongs to
+  another role, decide with the user who owns it before dispatching — the ownership guard blocks a
+  role from writing another's tree, so an unowned decision here stalls the task.
 {% if forge.kind != 'none' %}
 - [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
 {% endif %}
@@ -104,7 +107,7 @@ work is invented work.
 |---|---|---|---|---|
 | {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton | Boundaries match §2 and the user accepts them |
 | {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-002 | `devops` | dev environment reproducible from a clean clone; `{{ cfg.toolchain.test }}` runs | the suite runs green and empty | A clean clone reaches a green run in one documented command |
-| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier exists and is wired into CI, one test per floor in §6 | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
+| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier, in a path `{{ veto.name }}` owns per §2, wired into CI, one test per floor in §6 | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
 | {{ cfg.milestones.outline[0].id }}-S1-QA-004 | `qa` | tier thresholds from §3 enforced in CI | coverage gate fails below floor | A deliberate coverage drop reddens the pipeline |
 
 **Gate additions:** the floor tier must be non-empty and green, and every floor in §6 must map to a

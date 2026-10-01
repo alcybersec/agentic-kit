@@ -1689,7 +1689,7 @@ def test_design_has_no_inherited_section_when_none(load_fixture):
 def test_risk_register_has_a_table_header_and_no_invented_rows(load_fixture):
     body = render(load_fixture("greenfield_prd"))["docs/risk-register.md"]
     assert "| ID | Risk |" in body
-    assert "R-001" not in body
+    assert "| R-001 |" not in body  # the numbering hint may name R-001; no row may
 
 
 def test_adr_0001_records_the_install(load_fixture):
@@ -1812,6 +1812,9 @@ work is invented work.
 - [ ] The user has reviewed {% if cfg.spine.inherited %}{% for p in cfg.spine.inherited %}`{{ p }}`{{ ", " if not loop.last }}{% endfor %} and {% endif %}this file.
 - [ ] The role roster in §2 is accepted.
 - [ ] The floors in §6 are accepted.
+- [ ] The floor test tier has a home that `{{ veto.name }}` owns in §2. If every test path belongs to
+  another role, decide with the user who owns it before dispatching — the ownership guard blocks a
+  role from writing another's tree, so an unowned decision here stalls the task.
 {% if forge.kind != 'none' %}
 - [ ] `{{ forge.remote }}` is reachable and `{{ forge.cli }}` is authenticated.
 {% endif %}
@@ -1822,11 +1825,19 @@ work is invented work.
 |---|---|---|---|---|
 | {{ cfg.milestones.outline[0].id }}-S1-ARCH-001 | `architect` | `{{ cfg.spine.contracts }}` first entry; ADR for the module boundaries | contract test skeleton | Boundaries match §2 and the user accepts them |
 | {{ cfg.milestones.outline[0].id }}-S1-DEVOPS-002 | `devops` | dev environment reproducible from a clean clone; `{{ cfg.toolchain.test }}` runs | the suite runs green and empty | A clean clone reaches a green run in one documented command |
-| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier exists and is wired into CI, one test per floor in §6 | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
+| {{ cfg.milestones.outline[0].id }}-S1-{{ veto.name | upper }}-003 | `{{ veto.name }}` | the floor test tier, in a path `{{ veto.name }}` owns per §2, wired into CI, one test per floor in §6 | floor tier green | Each floor in §6 has at least one test that fails when it is violated |
 | {{ cfg.milestones.outline[0].id }}-S1-QA-004 | `qa` | tier thresholds from §3 enforced in CI | coverage gate fails below floor | A deliberate coverage drop reddens the pipeline |
 
 **Gate additions:** the floor tier must be non-empty and green, and every floor in §6 must map to a
 named test.
+{% if cfg.milestones.outline | length > 1 %}
+
+### Later milestones (outline only, not yet scoped)
+
+{% for m in cfg.milestones.outline[1:] %}
+- {{ m.id }} — {{ m.name }}
+{% endfor %}
+{% endif %}
 ```
 
 `templates/plan.md.j2`:
@@ -2065,6 +2076,29 @@ def test_freshly_rendered_manifests_verify_clean(load_fixture):
     for name in FIXTURES:
         cfg = load_fixture(name)
         assert verify(render(cfg), cfg) == [], name
+
+
+def test_an_m0_owner_absent_from_the_roster_is_reported(load_fixture):
+    """The M0 task table names architect, devops, qa and the veto role. A profile
+    without one of them renders a task assigned to a role that does not exist."""
+    cfg = load_fixture("greenfield_prd")
+    man = render(cfg)
+    man[cfg.spine["strategy"]] = man[cfg.spine["strategy"]].replace(
+        "| `devops` |", "| `platform` |")
+    assert any("devops" in p for p in verify(man, cfg))
+
+
+def test_a_veto_role_owning_no_path_is_reported(load_fixture):
+    """services_layout gives qa all of tests/** and safety no test path at all, so the
+    M0 floor-tier task is unexecutable under the ownership guard. A veto role owning
+    nothing at all is the degenerate form of the same problem."""
+    from kitgen.model import KitConfig
+    lock = load_fixture("python_monolith").to_lock()
+    for r in lock["roles"]:
+        if r["veto"]:
+            r["owns"] = []
+    bare = KitConfig.from_dict(lock)
+    assert any("veto" in p.lower() for p in verify(render(bare), bare))
 
 
 def test_missing_role_card_is_reported(load_fixture):
