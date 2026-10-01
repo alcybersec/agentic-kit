@@ -656,6 +656,11 @@ M2's installing skills branch on these, so they are normative:
 | 3 | refused to overwrite existing files; **nothing was written** |
 | 4 | the write failed partway, so the tree is **incomplete**; a plain retry will refuse with 3, and recovery is to fix the cause and re-run with `--force` |
 
+**Advisories are not problems.** `kitgen.advise()` prints `advice: …` lines on stderr and **never**
+affects the exit code (added 2026-10-02, decision 3). A roster above §8.4's ceiling, a role owning no
+path, or a role holding no task in an expanded graph are all valid configurations worth a second look;
+reporting them through code 1 would tell a calling skill that nothing was written.
+
 `--dry-run` **writes nothing and returns the code the real run would return** — including 3 when the
 tree has clashes and 1 when verification fails. It is a predictor, not a separate verdict: a preview
 that reports 0 where the real run reports 1 is worse than no preview. Its stdout carries the manifest,
@@ -785,6 +790,21 @@ another role owns, so giving one role a broad `tests/**` prevents every other ro
 — while the kit mandates test-first for logic. Either give each role the test subtree for its own
 code, or leave test paths unowned. Do not give one role the whole tree unless tests really are that
 role's exclusive job.
+
+**Ceiling: eight roles** (decided 2026-10-02, decision 3). §8.4's derivation rule produced twelve on a
+real repository. The cost of a role is not context — a subagent loads only its own card, ~2.3 KB — it is
+coordination: another boundary, another handoff, another row in every ownership table, and one more way
+for a task to land on someone who cannot write the path it needs. Above eight, fold domain roles into
+the nearest of `architect` / `backend` / `frontend` / `data` / `devops` unless they genuinely own
+distinct trees. `services_layout` sits at exactly eight and is the intended upper shape, not a warning.
+
+The number is the weaker half of the rule. The stronger half: **a role must own at least one path and,
+once the task graph is expanded past M0, must hold at least one task.** `kitgen.advise()` reports both,
+plus the ceiling, as **advice on stderr that never changes the exit code** — §7.1b's codes are an
+interface M2 branches on, and a questionable roster is not "nothing was written". The no-task check is
+deliberately silent until the graph is expanded: the generated M0 table assigns work to `architect`,
+`devops`, `qa` and the veto role only, so at install every domain role correctly has none, and advice
+nobody can act on is advice nobody reads.
 
 Always present: `architect`, `devops`, `qa`, and a veto role named `safety`. Added when detected:
 `data` (migrations or ORM present), `frontend` (a JS/TS application directory). Domain roles are

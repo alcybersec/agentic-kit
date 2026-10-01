@@ -517,3 +517,87 @@ COVERS = [
 def test_covers_truth_table(glob, path, expected, why):
     from kitgen.verify import _covers
     assert _covers(glob, path) is expected, why
+
+
+# --- advisories: valid, but probably wrong (decision 3) -----------------------
+
+def test_the_shipped_fixtures_draw_no_advice(load_fixture):
+    """Including services_layout at exactly eight roles — the ceiling is inclusive,
+    and a reference roster must not scold the person copying it."""
+    from kitgen.verify import advise
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        assert advise(render(cfg), cfg) == [], name
+
+
+def test_a_roster_above_the_ceiling_is_flagged(load_variant):
+    from kitgen.verify import ROLE_CEILING, advise
+    cfg = load_variant("services_layout")
+    extra = [
+        {"name": f"domain{i}", "description": f"Domain {i}.",
+         "owns": [f"services/domain{i}/**"], "handoff_extra": [], "veto": False}
+        for i in range(3)
+    ]
+    lock = cfg.to_lock()
+    lock["roles"] = lock["roles"] + extra
+    cfg2 = KitConfig.from_dict(lock)
+    assert len(cfg2.roles) == ROLE_CEILING + 3
+    msgs = advise(render(cfg2), cfg2)
+    assert any(f"above the {ROLE_CEILING}" in m for m in msgs), msgs
+    assert any("Fold domain roles" in m for m in msgs)
+
+
+def test_a_role_owning_no_path_is_flagged(load_fixture):
+    from kitgen.verify import advise
+    cfg = _variant(load_fixture("python_monolith"),
+                   lambda lock: _role(lock, "architect").__setitem__("owns", []))
+    assert any("owns no path" in m and "architect" in m for m in advise(render(cfg), cfg))
+
+
+def test_no_task_row_is_not_flagged_before_the_graph_is_expanded(load_fixture):
+    """The generated M0 table is scaffolding: it assigns tasks to architect, devops,
+    qa and the veto role only, so every domain role correctly has none at install.
+    Flagging that would fire on all three shipped fixtures — advice nobody can act on
+    is advice nobody reads."""
+    from kitgen.verify import advise
+    cfg = load_fixture("services_layout")
+    assert {"backend", "worker", "frontend", "data"} <= {r.name for r in cfg.roles}
+    assert advise(render(cfg), cfg) == []
+
+
+def test_a_role_with_no_task_row_is_flagged_once_the_graph_is_expanded(load_fixture):
+    """At the first gate the next milestone is expanded, and from then on a role with
+    no task anywhere is paying for a boundary and a handoff it never uses."""
+    from kitgen.verify import advise
+    cfg = load_fixture("services_layout")
+    man = render(cfg)
+    sp = cfg.spine["strategy"]
+    # What /gate-check does on PASS: expand the next milestone's rows.
+    man[sp] += ("\n| M1-S1-BACKEND-010 | `backend` | the ingest endpoint | unit | 2xx |\n"
+                "| M1-S1-QA-011 | `qa` | ingest e2e | e2e | green |\n")
+    msgs = advise(man, cfg)
+    assert any("'worker' is assigned no task anywhere" in m for m in msgs), msgs
+    assert any("expanded past M0" in m for m in msgs)
+    assert not any("'backend'" in m for m in msgs), "backend now has one"
+
+
+def test_an_advisory_never_changes_the_exit_code(load_fixture, tmp_path, capsys):
+    """§7.1b's codes are an interface M2 branches on. A roster worth a second look is
+    not "nothing was written"."""
+    import yaml
+    from kitgen.cli import main
+    cfg = load_fixture("services_layout")
+    lock = cfg.to_lock()
+    # A DOMAIN role, deliberately: `architect` with no paths is a hard verify error,
+    # because an M0 row tells it to write in a path it owns. `worker` appears in no M0
+    # row, so an empty `owns` there is exactly the valid-but-questionable case.
+    _role(lock, "worker")["owns"] = []
+    profile = tmp_path / "p.yaml"
+    profile.write_text(yaml.safe_dump(lock))
+    for p in cfg.spine["inherited"]:
+        (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / p).write_text("x")
+    rc = main(["render", "--profile", str(profile), "--out", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "advice: role 'worker' owns no path" in err

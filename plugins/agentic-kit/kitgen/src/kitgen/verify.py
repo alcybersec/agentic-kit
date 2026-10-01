@@ -25,7 +25,9 @@ import yaml
 from .model import KitConfig, _glob_prefix
 
 _TICKS = re.compile(r"`([^`]+)`")
-_TASK_ROW = re.compile(r"^\|\s*[\w]+-S\d+-[\w-]+-\d+\s*\|\s*`([^`]+)`\s*\|")
+# Group 1 is the task ID, group 2 the owning role. Both are read: the ID's milestone
+# prefix tells `advise` whether the graph has been expanded past M0.
+_TASK_ROW = re.compile(r"^\|\s*([\w]+-S\d+-[\w-]+-\d+)\s*\|\s*`([^`]+)`\s*\|")
 
 
 def _section(text: str, start: str, end: str | None) -> list[str] | None:
@@ -53,6 +55,58 @@ def _covers(glob: str, path: str) -> bool:
     return (fnmatch.fnmatch(path, glob) or prefix == path
             or (prefix != "" and path.startswith(prefix + "/"))
             or prefix.startswith(path + "/"))
+
+
+ROLE_CEILING = 8
+
+
+def advise(manifest: dict[str, str], cfg: KitConfig) -> list[str]:
+    """Non-fatal observations about a roster that is *valid* but probably wrong.
+
+    Separate from verify() on purpose: §7.1b makes the CLI's exit codes an interface
+    that M2's skills branch on, and 1 means "nothing was written". A roster of eleven
+    roles is not a reason to refuse to install, but it is worth saying out loud at the
+    one moment anyone is looking.
+
+    The rule rather than the number is the point. §8.4 derives roles from detected
+    directories, which on a real repository produced twelve; the cost of each is not
+    tokens — a subagent loads only its own card — but coordination: another boundary,
+    another handoff, another row in every ownership table. A role that receives no
+    task is paying that cost for nothing.
+    """
+    out: list[str] = []
+    if len(cfg.roles) > ROLE_CEILING:
+        out.append(
+            f"{len(cfg.roles)} roles, above the {ROLE_CEILING} §8.4 recommends. Each "
+            f"one adds a boundary, a handoff and a row in every ownership table. Fold "
+            f"domain roles into the nearest of architect / backend / frontend / data / "
+            f"devops unless they really own distinct trees.")
+    for r in cfg.roles:
+        if not r.owns:
+            out.append(
+                f"role {r.name!r} owns no path, so the ownership guard grants it "
+                f"nothing and every task it is given writes somewhere unowned.")
+
+    # A role named in no task row is a role with no work — but only once the graph
+    # has been expanded past M0. The generated M0 table is scaffolding and assigns
+    # tasks to architect, devops, qa and the veto role alone, so at install time every
+    # domain role correctly has none and this check would fire on all three fixtures.
+    # It becomes meaningful at the first gate, when the next milestone is expanded.
+    strategy = manifest.get(cfg.spine["strategy"], "")
+    sec11 = _section(strategy, "## 11.", None) or []
+    rows = [m for l in sec11 if (m := _TASK_ROW.match(l))]
+    m0 = cfg.milestones["outline"][0]["id"]
+    expanded = any(not m.group(1).startswith(f"{m0}-") for m in rows)
+    if expanded:
+        owners = {m.group(2) for m in rows}
+        for r in cfg.roles:
+            if r.name not in owners:
+                out.append(
+                    f"role {r.name!r} is assigned no task anywhere in "
+                    f"{cfg.spine['strategy']} §11, and the graph is expanded past "
+                    f"{m0}. A role costs a boundary and a handoff whether or not it "
+                    f"does work; leave it out until there is some.")
+    return out
 
 
 def verify(manifest: dict[str, str], cfg: KitConfig,
@@ -146,7 +200,7 @@ def verify(manifest: dict[str, str], cfg: KitConfig,
     if sec11 is None:
         problems.append(f"{strategy_path}: §11 task graph not found")
         sec11 = []
-    task_rows = [(l, m.group(1)) for l in sec11 if (m := _TASK_ROW.match(l))]
+    task_rows = [(l, m.group(2)) for l in sec11 if (m := _TASK_ROW.match(l))]
     if not task_rows:
         problems.append(f"{strategy_path} §11: no M0 task rows found")
     owners = {o for _, o in task_rows}

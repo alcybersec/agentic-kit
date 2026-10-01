@@ -27,7 +27,7 @@ from jinja2 import UndefinedError
 
 from .model import KitConfig
 from .render import is_preserved, render
-from .verify import verify
+from .verify import advise, verify
 
 HOOKS_PREFIX = ".claude/hooks/"
 
@@ -114,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
         problems = verify(manifest, cfg, project_root=args.root)
         for p in problems:
             print(p)
+        # Advisories never change the exit code: §7.1b's codes are an interface, and
+        # a roster worth a second look is not a reason to report "nothing written".
+        for a in advise(manifest, cfg):
+            print(f"advice: {a}", file=sys.stderr)
         return 1 if problems else 0
 
     # Verify BEFORE touching the filesystem: a half-written kit is worse than none.
@@ -123,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         for p in problems:
             print(p, file=sys.stderr)
         return 1
+    for a in advise(manifest, cfg):
+        print(f"advice: {a}", file=sys.stderr)
 
     # A clash is a FILE where the manifest wants a file: --force overwrites it,
     # subject to is_preserved. Anything else in the way is a blocker, which
