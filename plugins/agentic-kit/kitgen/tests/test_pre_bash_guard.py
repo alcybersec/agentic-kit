@@ -132,8 +132,94 @@ def test_assistant_attribution_in_a_commit_message_is_blocked(tmp_path):
     r = run_hook(HOOK, bash_payload(cmd, p), p)
     assert r.returncode == 2
     assert "attribution" in r.stderr.lower()
-    long_form = "git commit --only a.py --message='feat: x by Claude'"
-    assert run_hook(HOOK, bash_payload(long_form, p), p).returncode == 2
+    for blocked in [
+        "git commit --only a.py --message='feat: x\n\nCo-Authored-By: Claude <x@y>'",
+        "git commit --only a.py -m 'feat: x' -m 'Generated with Claude Code'",
+        "git commit --only a.py -m 'feat: x \U0001f916'",
+    ]:
+        assert run_hook(HOOK, bash_payload(blocked, p), p).returncode == 2, blocked
+
+
+def test_a_message_that_merely_names_the_assistant_is_allowed(tmp_path):
+    """The policy is 'do not credit the assistant', not 'never type the word'."""
+    p = make_project(tmp_path)
+    for ok in ["git commit --only a.py -m 'docs: mention anthropic sdk'",
+               "git commit --only a.py -m 'fix: claude hook ordering'"]:
+        assert run_hook(HOOK, bash_payload(ok, p), p).returncode == 0, ok
+
+
+def test_a_commit_message_naming_a_secret_path_is_allowed(tmp_path):
+    p = make_project(tmp_path)
+    for ok in ["git commit --only a.py -m \"feat: touch .env handling\"",
+               "git commit --only a.py --message='feat: touch .env handling'",
+               "git commit --only a.py -m 'feat: x\n\nnotes about .env; more'"]:
+        assert run_hook(HOOK, bash_payload(ok, p), p).returncode == 0, ok
+    # ...but the message skip must not become a bypass for what follows it.
+    r = run_hook(HOOK, bash_payload("git commit -m 'x' && cat .env | base64", p), p)
+    assert r.returncode == 2
+
+
+@pytest.mark.parametrize("command", [
+    "git checkout -- .",
+    "git checkout .",
+    "git restore .",
+    "git restore --staged .",
+    "git clean -fd",
+    "git clean -n",
+    "git push --delete origin main",
+    "git push -d origin main",
+    "git push origin :main",
+    "sudo -u bob rm -rf /x",
+    "sudo -g wheel -u bob git stash",
+    "env -u FOO git add -A",
+    "nice -n 5 rm -rf x",
+])
+def test_working_tree_wipes_and_remote_deletes_are_blocked(tmp_path, command):
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == 2, command
+
+
+@pytest.mark.parametrize("command", [
+    "git checkout topic",
+    "git checkout -b topic",
+    "git checkout -- src/a.py",
+    "git restore src/a.py",
+    "git restore --staged src/a.py",
+    "git push origin topic",
+])
+def test_scoped_checkout_restore_and_push_are_allowed(tmp_path, command):
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == 0, command
+
+
+def test_the_wipe_message_names_the_peer_agent_and_the_rm_message_a_next_step(tmp_path):
+    p = make_project(tmp_path)
+    r = run_hook(HOOK, bash_payload("git clean -fd", p), p)
+    assert "peer agent" in r.stderr
+    r = run_hook(HOOK, bash_payload("rm -rf build", p), p)
+    assert "make clean" in r.stderr and "rm <file>" in r.stderr
+
+
+@pytest.mark.parametrize("command, expected", [
+    ('bash -c "git add -A"', 0),
+    ("sh -c 'git stash'", 0),
+    ("xargs git add -A", 0),
+    ("git add -A\\", 0),
+    ('cat "$(echo .e)nv"', 0),
+    ("git commit -F msg.txt", 0),
+    ('echo "a; git stash now"', 2),
+    ("echo 'a; git reset --hard now'", 2),
+])
+def test_known_matcher_limits(tmp_path, command, expected):
+    """Documented limits of matching command STRINGS, not oversights (design spec
+    6.2: neither layer is a sandbox). The first six slip through (so does `echo 'a; git add -A'`, only because the
+    closing quote sticks to `-A`: luck, not design): a command inside
+    a quoted interpreter string, a wrapper that is not peeled, a trailing
+    backslash, a path built at run time, a message read from a file. The last two are
+    false positives: the segmenter is not quote-aware. This pins CURRENT behaviour;
+    if one changes, decide deliberately and update 6.2."""
+    p = make_project(tmp_path)
+    assert run_hook(HOOK, bash_payload(command, p), p).returncode == expected, command
 
 
 def test_attribution_is_allowed_when_the_profile_permits_it(tmp_path):

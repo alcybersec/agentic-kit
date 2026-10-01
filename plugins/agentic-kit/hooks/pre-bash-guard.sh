@@ -39,18 +39,25 @@ qopen() {
   esac
 }
 
+# Words of a `git commit` that are NOT message text, for the secret scan: a message
+# that names `.env` is discussing it, not reading it.
+have_kept=0
+kept=""
+
 check_commit() {
   local a expect=0 i c
+  have_kept=1
   for a in "$@"; do
     if [ -n "$skipq" ]; then
       case "$a" in *"$skipq") skipq="" ;; esac
       continue
     fi
     if [ "$expect" -eq 1 ]; then expect=0; qopen "$a"; continue; fi
+    kept+=" $a"
     case "$a" in
       --all) kit_deny "Blocked: 'git commit --all' commits whatever is modified, including other sessions' files. $ONLY" ;;
       --message|--file|--author|--date|--template|--reuse-message|--reedit-message) expect=1 ;;
-      --*=*) qopen "${a#*=}" ;;
+      --*=*) kept="${kept% "$a"} ${a%%=*}"; qopen "${a#*=}" ;;
       --*) ;;
       -?*)
         for ((i = 1; i < ${#a}; i++)); do
@@ -58,6 +65,7 @@ check_commit() {
           case "$c" in
             a) kit_deny "Blocked: 'git commit -a' commits whatever is modified, including other sessions' files. $ONLY" ;;
             m|F|C|c|t)
+              kept="${kept% "$a"} ${a:0:i+1}"
               if [ $((i + 1)) -lt ${#a} ]; then qopen "${a:i+1}"; else expect=1; fi
               break ;;
           esac
@@ -75,8 +83,18 @@ check_segment() {
     if [[ "${w[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then i=$((i + 1)); continue; fi
     case "${w[i]##*/}" in
       sudo|env|command|exec|nohup|time|nice|builtin)
+        local wrapper="${w[i]##*/}"
         i=$((i + 1))
-        while [ "$i" -lt "$n" ] && [[ "${w[i]}" == -* ]]; do i=$((i + 1)); done ;;
+        while [ "$i" -lt "$n" ] && [[ "${w[i]}" == -* ]]; do
+          # Flags that take their argument as the NEXT word: it is not the command.
+          case "$wrapper:${w[i]}" in
+            sudo:-u|sudo:-g|sudo:-C|sudo:-h|sudo:-p|sudo:-r|sudo:-t|sudo:-U|sudo:-D|sudo:-R|sudo:-T|sudo:--user|sudo:--group|sudo:--host|sudo:--prompt|sudo:--role|sudo:--type|sudo:--chdir|sudo:--close-from \
+            |env:-u|env:--unset|env:-C|env:--chdir|env:-S|env:--split-string \
+            |nice:-n|nice:--adjustment|time:-f|time:--format|time:-o|time:--output)
+              i=$((i + 1)) ;;
+          esac
+          i=$((i + 1))
+        done ;;
       *) break ;;
     esac
   done
@@ -115,10 +133,21 @@ check_segment() {
         push)
           for a in "${args[@]}"; do
             case "$a" in
+              --delete|-d|:*)
+                kit_deny "Blocked: deleting a remote branch ('${a}') cannot be undone from here and may remove a peer session's work. Ask the user to do it." ;;
               --force|-f|+*|-[!-]*f*)
                 kit_deny "Blocked: force push ('${a}'). It can destroy a peer session's commits. Ask the user, or use --force-with-lease, which refuses when the remote has moved." ;;
             esac
           done ;;
+        checkout|restore)
+          for a in "${args[@]}"; do
+            case "$a" in
+              .|./)
+                kit_deny "Blocked: 'git ${sub} ${a}' overwrites every modified file in the shared checkout, including a peer agent's uncommitted work, with no way back. Restore only the specific file you own ('git ${sub} -- <path>'), or ask the user." ;;
+            esac
+          done ;;
+        clean)
+          kit_deny "Blocked: 'git clean' deletes untracked files, which on a shared checkout include a peer agent's new, uncommitted work, with no way back. Delete the specific paths you created, or ask the user." ;;
         reset)
           for a in "${args[@]}"; do
             [ "$a" = "--hard" ] && kit_deny "Blocked: 'git reset --hard' discards uncommitted work that may not be yours. Use 'git restore <path>' on a file you own, or ask the user."
@@ -136,7 +165,7 @@ check_segment() {
         esac
       done
       if [ "$rec" -eq 1 ] && [ "$frc" -eq 1 ]; then
-        kit_deny "Blocked: recursive forced 'rm'. Delete named files individually, and ask the user for anything broader."
+        kit_deny "Blocked: recursive forced 'rm' ('rm -rf') cannot be undone. Delete the specific paths with 'rm <file>' (or 'rm -r <dir>' without -f), or, for a build artefact, use the project's clean target (e.g. 'make clean'). Ask the user for anything broader."
       fi ;;
     docker|docker-compose)
       local sawdown=0 vol=0
@@ -202,14 +231,29 @@ check_secrets() {
 # Segment on ; | & newline ( ) and backtick, so a command merely *mentions* a
 # rule inside an argument is not blocked, while $(...) and && chains are inspected.
 while IFS= read -r seg; do
+  # A commit message can span segments (newlines, `;`, parens inside the quotes).
+  # While one is open, drop its words, through the one that closes it.
+  if [ -n "$skipq" ]; then
+    read -ra mw <<< "$seg"
+    seg=""; closed=0
+    for x in "${mw[@]}"; do
+      if [ "$closed" -eq 0 ]; then
+        case "$x" in *"$skipq") skipq=""; closed=1 ;; esac
+      else
+        seg+=" $x"
+      fi
+    done
+  fi
   [ -n "${seg//[[:space:]]/}" ] || continue
+  have_kept=0; kept=""
   check_segment "$seg"
-  check_secrets "$seg"
+  if [ "$have_kept" -eq 1 ]; then check_secrets "git commit$kept"; else check_secrets "$seg"; fi
 done < <(printf '%s\n' "$cmd" | tr ';|&\n()`' '\n')
 
 if [ "$is_commit" -eq 1 ] && [ "$(kit_q '.attribution.mention_assistant_in_commits')" != "true" ]; then
-  if printf '%s' "$cmd" | grep -qiE 'claude|anthropic'; then
-    kit_deny "Blocked by attribution policy: this project does not name the assistant in commit messages. Remove the Co-Authored-By / 'Claude' / 'Anthropic' text and commit again."
+  # Attribution-SHAPED text only; a message may legitimately say "anthropic sdk".
+  if printf '%s\n' "$cmd" | grep -qiE 'co-authored-by:.*(claude|anthropic)|generated (with|by).*(claude|anthropic)|🤖'; then
+    kit_deny "Blocked by attribution policy: this project does not name the assistant in commit messages. Remove the Co-Authored-By / 'Generated with' / robot-emoji line and commit again."
   fi
 fi
 
