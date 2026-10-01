@@ -76,6 +76,33 @@ that coverage is not the question.
 
 ## Part 2 — Fix plan
 
+### Phase 0 — ship blockers (7) — **DONE 2026-10-01**
+
+All seven landed as one commit each (`9c54750`, `10d6975`, `e45bf8a`, `768fc7c`, `5e9eb71`,
+`2c1f15f`, `c5dbb56`). Suite 489 -> 550. Every new test was run against the pre-fix code and
+confirmed able to fail, except where noted as a false-positive guard. 13/13 templates still in
+sync; `claude plugin validate` clean.
+
+Notes against the plan as written:
+- **0.1** rejects a target lexically, not by checking the filesystem: §4.4 forbids the model from
+  reading the project tree. `-a`/`-r`/`-R` were left out of the rejected set — `gofmt -r` takes a
+  rewrite rule, not a target.
+- **0.2** took the prose-on-stderr route rather than the stdout object. It needs no `hookEventName`
+  and no per-event `decision` vs `permissionDecision` distinction, so there is no schema to drift
+  against. Two tests parsed the stderr JSON and were updated; the other ~270 were substring
+  assertions and passed unchanged, which is precisely why none of them caught the defect.
+- **0.4** turned two existing exit-4 tests into refusals. Exit 4 now means a failure the preflight
+  genuinely cannot predict (read-only directory, full disk), and keeps its own test.
+- **0.5** mirrors `hooks/**`, `agents/**`, `settings.json` and the lock into the `settings.json`
+  deny, but **not** `kit.yaml`: it is the one file a legitimate change to the kit edits, and a
+  session-wide deny would leave nobody able to add a role.
+- **0.6** chose the `/handoff` rewording over folding `spine.contracts` into `architect.owns`, and
+  added the verify check in the general form, so folding it in later stays available. The "(I8)"
+  reference in the row below is a logging error in this document: no A-I8 was recorded in Part 3.
+  The clause meant is ARCH-001's acceptance, "the user accepts them", which no subagent can satisfy;
+  it now reads as a role-checkable condition with the user's acceptance moved to the gate.
+- **0.7** could not be fixed in the deny rules, only in the hooks. §6.2 records the remainder.
+
 ### Phase 0 — ship blockers (7)
 
 | # | Fix | Files | Test to add |
