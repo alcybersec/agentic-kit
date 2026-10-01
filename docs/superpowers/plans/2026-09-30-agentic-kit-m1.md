@@ -4137,7 +4137,8 @@ Note on matching: `**` in a bash `case` glob already spans `/`, so `secrets/**` 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_pre_file_guard.py tests/test_hooks_inert.py -v`
-Expected: PASS, 20 passed
+Expected: PASS — 19 guard tests plus the 98 inertness tests. The draft said 20; it assumed six guard
+cases and miscounted the inertness file.
 
 - [ ] **Step 5: Commit**
 

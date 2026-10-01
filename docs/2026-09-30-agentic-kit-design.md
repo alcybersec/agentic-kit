@@ -192,6 +192,13 @@ observability: true                # when true, the "ships with the feature" rul
   creating a new file there", while "NotebookEdit isn't covered, so add an `Edit` deny rule" — so the
   pair is the complete closure over every file tool. A `Write(path)` rule is **accepted but never
   consulted, and warns at startup**, so emitting one is strictly worse than omitting it.
+- `secrets` patterns are **root-anchored and matched whole**, like `owns` globs. `./.env` covers the
+  repository root only — a nested `sub/.env` needs `./**/.env` — and `./secrets/**` covers the files
+  under that directory but not a read of the directory entry itself, which exposes filenames. Both are
+  traps for whoever authors a profile by hand, so the interview should prefer `./**/<name>` for any
+  secret that can appear at more than one depth. As with `owns`, matching is case-sensitive: on a
+  case-insensitive volume `.ENV` reaches a file that `./.env` names, and the kit does not pretend
+  otherwise (§5.2).
 - `observability` MUST be a real boolean. It is never coerced — YAML `"false"` is a string, and
   coercing it would write `true` into the lock while the human reads `"false"` in `kit.yaml`.
 - Ownership globs MUST be **normalised**: repository-root-relative, forward-slashed, with no leading
@@ -274,7 +281,7 @@ the same worktree lesson is recorded twice in this user's notes.
 | Hook | Event | Blocks |
 |---|---|---|
 | `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/claude|anthropic|co-authored-by:.*claude/i` when `attribution.mention_assistant_in_commits` is false |
-| `pre-file-guard` | PreToolUse/Read,Edit,Write | any `.tool_input.file_path` matching `secrets` |
+| `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
 | `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file |
 | `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note |
 
@@ -299,6 +306,12 @@ these hooks match on **command strings**, so neither is a sandbox:
 - A command routed through an allow-listed interpreter is unconstrained. `toolchain.pm` becomes
   `Bash(uv:*)` so that ordinary work does not prompt, and `uv run python -c "…"` therefore matches no
   deny rule however destructive its argument.
+- **`pre-file-guard` is not a second boundary, and it was wrong of this document to imply otherwise.**
+  It duplicates `settings.json`'s secret denies deliberately, but an agent with shell access can edit
+  `kit.lock.json` or the hook script as easily as `settings.json`, so it adds no containment. Its two
+  real jobs are that it reads the lock at **call time**, so a `secrets` change takes effect without a
+  re-render, and that it **explains itself** — naming the pattern that matched and pointing at the
+  committed `.example` template, where a deny rule gives a bare refusal.
 - Path denies reach further into Bash than one might expect, and `cat ./.env` **is** blocked: they
   apply "to file commands Claude Code recognizes in Bash, such as `cat`, `head`, `tail`, `sed`, and
   `tee`, and to the targets of Bash redirections such as `> file` and `< file`". The residual gap is
