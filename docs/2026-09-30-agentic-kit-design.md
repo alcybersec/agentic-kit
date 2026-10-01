@@ -421,8 +421,34 @@ a classification before that is written, not after:
 | `plan/README.md` | **generate-once** — it is pure state after the first task, so a re-render *deletes* the dispatch record |
 | `adr/0001-adopt-agentic-kit.md` | **generate-once** — it stamps `rendered_on` and `kit_version`; re-rendering restamps an *Accepted* ADR with a later install's date, falsifying the record it exists to preserve |
 
-`kitgen` therefore declares a `GENERATE_ONCE` set beside `SINGLETONS`, and the CLI refuses to overwrite
-anything in it without `--force`.
+`kitgen` therefore declares a `GENERATE_ONCE` set beside `SINGLETONS`, and the CLI **never** overwrites
+anything in it — `--force` included. `--force` means "replace the generated scaffolding", not "discard
+history", so regenerating a generate-once file is a deliberate manual act: delete it first. The CLI
+reports on stderr which files it kept, naming each, so the skip is never silent.
+
+**On-disk drift is not detected in M1.** `kitgen verify` re-renders from the profile and checks
+internal consistency plus the presence of `spine.inherited` docs; it does not compare the rendered
+manifest against what is actually on disk, so a hand-edited or corrupted `CLAUDE.md` passes. That
+comparison is `/kit-upgrade`'s job in M2, and it needs this classification to do it: a difference in
+*stable scaffolding* is drift to offer as a patch, a difference in a *living* document is expected and
+must be left alone, and a *generate-once* file is never compared at all.
+
+### 7.1b The CLI's exit codes are an interface
+
+M2's installing skills branch on these, so they are normative:
+
+| Code | Meaning |
+|---|---|
+| 0 | the kit was written, or a dry run completed |
+| 1 | verification found problems; **nothing was written** |
+| 2 | the profile is bad — unparseable, missing a field, a scalar where a mapping belongs, an unreadable file, or a malformed `--rendered-on` |
+| 3 | refused to overwrite existing files; **nothing was written** |
+| 4 | the write failed partway, so the tree is **incomplete**; a plain retry will refuse with 3, and recovery is to fix the cause and re-run with `--force` |
+
+Codes 1 and 3 guarantee an untouched tree. Code 4 does not, and is the only state where the kit can be
+half-installed: the CLI is not atomic, and its stderr names the file that failed and the files already
+written so the caller can tell how far it got. Collapsing a write failure into 1 would tell a skill
+that verification failed when in fact a partial kit is on disk.
 
 ### 7.2 Brownfield preservation rule (normative)
 
