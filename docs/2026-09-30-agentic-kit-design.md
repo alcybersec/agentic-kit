@@ -385,6 +385,19 @@ handoff gate. Verified against the Claude Code binary, which constructs it with
   produce a note is blocked repeatedly until the harness's cap (`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`,
   default 8) intervenes — eight wasted turns, surfacing as the subagent looping rather than as a clear
   failure.
+- **The note must appear in *either* source, not the first available one.** Checking
+  `last_assistant_message` and only falling back when it is empty blocks a note that genuinely exists
+  whenever the agent adds a closing remark after emitting it — "Done." after the note is entirely
+  ordinary, and the gate would refuse a finished task. The subagent transcript is still read before the
+  parent's, so the false negative above stays closed.
+
+**What this gate can promise, and what it cannot.** Because `stop_hook_active` makes the hook succeed on
+the retry, **it can only ever block once**: an agent that never produces a note is nudged a single time
+and then allowed to stop. That is the harness's intended Stop-hook semantics rather than a defect, but it
+means the hook *prompts for* a handoff note and cannot *force* one. Validating the handoff remains the
+Orchestrator's job, which the generated `strategy.md` §9 already requires — "a note without a pasted run
+is not evidence and the Orchestrator re-runs the tests itself." Nobody reading this hook should conclude
+the note is guaranteed.
 
 **Hook I/O contract**, confirmed against the official `plugin-dev/hook-development` examples: the
 payload arrives as JSON on stdin (`.tool_name`, `.tool_input.command`, `.tool_input.file_path`,
