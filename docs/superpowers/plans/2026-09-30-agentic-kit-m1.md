@@ -38,6 +38,9 @@ Templates are split one-per-output-file so a change to `strategy.md` prose canno
 - Create: `.claude-plugin/marketplace.json`
 - Create: `plugins/agentic-kit/.claude-plugin/plugin.json`
 - Create: `plugins/agentic-kit/kitgen/pyproject.toml`
+- Create: `plugins/agentic-kit/kitgen/src/kitgen/__init__.py` (empty; hatchling needs a package to ship)
+- Create: `plugins/agentic-kit/kitgen/tests/__init__.py` (empty; Task 10's `from .hooks_conftest import` needs `tests` to be a package)
+- Generated: `plugins/agentic-kit/kitgen/uv.lock` (commit it)
 - Test: `plugins/agentic-kit/kitgen/tests/test_manifests.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -115,12 +118,22 @@ kitgen = "kitgen.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/kitgen"]
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 ```
+
+Without the `[tool.hatch.build.targets.wheel]` block **and** an existing `src/kitgen/__init__.py`, the
+build fails with `ValueError: Unable to determine which files to ship inside the wheel` and `uv run`
+never reaches pytest. `packages = [...]` also ships every non-ignored file under the package
+directory, which is how `templates/*.j2` reach the wheel in Task 4 — so never narrow it to an
+`include = [...]` of `*.py`, and never add a `.gitignore` rule matching `*.j2` or `templates/`
+(hatch honours `.gitignore`).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -130,7 +143,7 @@ Expected: PASS, 2 passed
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .claude-plugin plugins/agentic-kit/.claude-plugin plugins/agentic-kit/kitgen/pyproject.toml plugins/agentic-kit/kitgen/tests/test_manifests.py
+git add .claude-plugin plugins/agentic-kit/.claude-plugin plugins/agentic-kit/kitgen/pyproject.toml plugins/agentic-kit/kitgen/tests/test_manifests.py plugins/agentic-kit/kitgen/tests/__init__.py plugins/agentic-kit/kitgen/src/kitgen/__init__.py plugins/agentic-kit/kitgen/uv.lock
 git commit -m "feat: marketplace and plugin manifests with validation tests"
 ```
 
@@ -666,6 +679,16 @@ def test_claude_md_names_only_the_chosen_forge(load_fixture):
     assert "gh " in gh and "glab" not in gh
     none = render(load_fixture("greenfield_prd"))["CLAUDE.md"]
     assert "glab" not in none and "gh " not in none
+
+
+def test_templates_actually_ship_in_the_installed_package():
+    """`uv run` installs editable, so Path(__file__)/templates always resolves in
+    tests even if the wheel omitted the .j2 files. Assert through the package's
+    resource API instead, which is what a non-editable consumer install exercises."""
+    from importlib.resources import files
+    shipped = {p.name for p in (files("kitgen") / "templates").iterdir()}
+    assert "CLAUDE.md.j2" in shipped
+    assert all(n.endswith(".j2") for n in shipped), shipped
 
 
 def test_no_template_placeholder_survives_rendering(load_fixture):
@@ -2023,7 +2046,20 @@ def main(argv: list[str] | None = None) -> int:
 Run: `cd plugins/agentic-kit/kitgen && uv run pytest tests/test_cli.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Document how a consumer invokes it**
+
+The installing skills will not have `kitgen` on `PATH` — the plugin lands in Claude Code's plugin
+cache, not in a venv the project knows about. Add this line to the module docstring of `cli.py` and
+use the same form in every skill that calls it:
+
+```
+uv run --project "${CLAUDE_PLUGIN_ROOT}/kitgen" kitgen render --profile <p> --out <dir>
+```
+
+`--project` builds its venv under the plugin cache directory on first use, so treat a read-only or
+non-writable plugin cache as a real failure mode and report it rather than falling back silently.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add plugins/agentic-kit/kitgen/src/kitgen/cli.py plugins/agentic-kit/kitgen/src/kitgen/__init__.py plugins/agentic-kit/kitgen/tests/test_cli.py
@@ -2040,7 +2076,7 @@ This is the task that keeps a globally installed plugin from disturbing every ot
 - Create: `plugins/agentic-kit/hooks/lib/kitlock.sh`
 - Test: `plugins/agentic-kit/kitgen/tests/test_hooks_inert.py`
 - Test: `plugins/agentic-kit/kitgen/tests/hooks_conftest.py`
-- Create: `plugins/agentic-kit/kitgen/tests/__init__.py`
+- (`tests/__init__.py` already exists from Task 1 — do not recreate it)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2213,11 +2249,9 @@ chmod +x plugins/agentic-kit/hooks/*.sh
 ```
 
 The hook tests import each other with `from .hooks_conftest import ...`, which requires the test
-directory to be a package. Create it:
-
-```bash
-touch plugins/agentic-kit/kitgen/tests/__init__.py
-```
+directory to be a package. `tests/__init__.py` was already created in Task 1, so there is nothing to
+do here — just confirm it exists. Note that `hooks_conftest.py` is deliberately **not** named
+`conftest.py`: pytest never auto-loads it, and it is only a helper module.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -3250,6 +3284,17 @@ def test_rendered_kit_is_idempotent(name, tmp_path):
     assert main(["render", "--profile", str(profile), "--out", str(tmp_path),
                  "--force"]) == 0
     assert {p: (tmp_path / p).read_text() for p in render(cfg)} == first
+
+
+def test_marketplace_source_resolves_to_the_plugin_manifest():
+    """Task 1 asserted the source string; assert the path it names actually exists,
+    and that the two manifests agree on the plugin name."""
+    repo = Path(__file__).resolve().parents[4]
+    mp = json.loads((repo / ".claude-plugin/marketplace.json").read_text())
+    entry = mp["plugins"][0]
+    manifest = repo / entry["source"] / ".claude-plugin/plugin.json"
+    assert manifest.exists(), manifest
+    assert json.loads(manifest.read_text())["name"] == entry["name"]
 
 
 def test_hooks_are_inert_in_a_rendered_tree_before_the_lock_lands(tmp_path):
