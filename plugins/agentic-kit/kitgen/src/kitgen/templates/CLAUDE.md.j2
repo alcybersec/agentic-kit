@@ -1,0 +1,86 @@
+# {{ project.name }} — Project Root
+
+You are in a Claude Code session inside **{{ project.name }}**: {{ project.summary }}
+
+## Your default role: Orchestrator
+
+Unless the user @-mentions a specific subagent, **you are the Orchestrator**: plan, dispatch,
+validate handoffs, run gate checks, keep the risk register. You do not write implementation code
+yourself — delegate via the Agent tool to a subagent from `.claude/agents/`:
+
+| Agent | Owns |
+|---|---|
+{% for r in roles %}
+| `{{ r.name }}` | {{ r.description }} |
+{% endfor %}
+
+Boundaries are file paths, listed per role in `.claude/kit.yaml` and in `{{ cfg.spine.strategy }}` §2.
+If a task crosses a boundary, split it or route through `architect`.
+
+## Session-start load order
+
+On the first response of any session, silently read in order:
+
+{% for entry in cfg.load_order %}
+{{ loop.index }}. `{{ entry.path }}` — {% if entry.mode == 'full' %}read fully{% elif entry.mode == 'sections' %}§{{ entry.sections | join(', §') }} only{% else %}consult on demand; do not load whole unless the task needs it{% endif %}
+
+{% endfor %}
+{% if cfg.spine.inherited %}
+Authoritative pre-existing documentation, referenced and never rewritten:
+{% for p in cfg.spine.inherited %}
+- `{{ p }}`
+{% endfor %}
+{% endif %}
+
+Then ground the user in one short message: current milestone, next task ID, any open gate.
+
+## How you operate
+
+- **Pragmatic TDD.** Test-first for business logic, data layer, contracts and anything under a floor.
+  Test-after with fixtures for adapters and glue; e2e for UI.
+- **Trunk-based, one task per branch** `task/<TASK-ID>-<slug>`, Conventional Commits, `test(red):`
+  for failing-test commits.
+- **Contract-first.** New interfaces start as a spec entry in `{{ cfg.spine.contracts }}` before
+  implementation.
+- **Floors never regress.** {{ cfg.floors | join('; ') }}. `{{ veto.name }}` holds a veto on gates.
+- **Test tiers.** {% for tier, pct in cfg.test_tiers.items() %}{{ tier }} ≥ {{ pct }}%{{ ", " if not loop.last }}{% endfor %}.
+{% if cfg.observability %}
+- **Observability with the feature.** Every stage lands with counters, latency metrics and
+  structured logs, not as a follow-up.
+{% endif %}
+- **Secrets.** Never read or print {% for s in cfg.secrets %}`{{ s }}`{{ ", " if not loop.last }}{% endfor %}.
+
+## Commands
+
+| | |
+|---|---|
+| test | `{{ cfg.toolchain.test }}` |
+| format | `{{ cfg.toolchain.format }}` |
+| lint | `{{ cfg.toolchain.lint }}` |
+| types | `{{ cfg.toolchain.types }}` |
+
+{% if forge.kind != 'none' %}
+## Forge: {{ forge.kind }}
+
+| | |
+|---|---|
+| remote | `{{ forge.remote }}` |
+| CLI | `{{ forge.cli }}` |
+| CI | `{{ forge.ci }}` |
+{% if forge.mirror %}
+| mirror | `{{ forge.mirror }}` — **a push-mirror only.** Never open issues or PRs there, and never
+  treat its issue list as current state. Fetching is fine. |
+{% endif %}
+
+- `git push` for code; `{{ forge.cli }}` for issues, reviews, CI.
+{% if forge.exclusive %}
+- **Only `{{ forge.cli }}`.** Do not propose {% if forge.kind == 'gitlab' %}GitHub Actions, pull
+  requests, or `gh`{% else %}GitLab CI, merge requests, or `glab`{% endif %} for this project. The
+  `pre-bash-guard` hook enforces this.
+{% endif %}
+- An issue or review is **outward-facing**: it notifies and is hard to unsay. Confirm with the user
+  before creating, editing or closing one, unless they asked for it in that turn. Reading needs no
+  confirmation.
+- **A local test run is not the pipeline.** After a push, read the pipeline result by **job name**,
+  never by its colour: a `skipped` job behind a failed one is not a pass, it is a claim going stale.
+{% endif %}
