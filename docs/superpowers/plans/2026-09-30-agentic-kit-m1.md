@@ -1331,8 +1331,9 @@ git commit -m "feat(kitgen): role card, orchestrator card and agent-memory templ
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# plugins/agentic-kit/kitgen/tests/test_render_settings.py
 import json
+
+import pytest
 
 from kitgen.render import render
 
@@ -1348,13 +1349,20 @@ def test_settings_is_valid_json(load_fixture):
         assert settings(load_fixture(name))["permissions"]
 
 
-def test_every_secret_path_is_denied_for_read_and_edit(load_fixture):
+def test_every_secret_path_is_denied_for_read_edit_and_write(load_fixture):
     for name in FIXTURES:
         cfg = load_fixture(name)
         deny = settings(cfg)["permissions"]["deny"]
         for s in cfg.secrets:
-            assert f"Read({s})" in deny, (name, s)
-            assert f"Edit({s})" in deny, (name, s)
+            for verb in ("Read", "Edit", "Write"):
+                assert f"{verb}({s})" in deny, (name, verb, s)
+
+
+def test_the_kit_protects_its_own_config_from_both_verbs(load_fixture):
+    deny = settings(load_fixture("services_layout"))["permissions"]["deny"]
+    for path in ("./.claude/settings.json", "./.claude/kit.lock.json"):
+        assert f"Edit({path})" in deny
+        assert f"Write({path})" in deny
 
 
 def test_destructive_commands_are_denied(load_fixture):
@@ -1404,6 +1412,42 @@ def test_subagent_spawn_depth_is_capped(load_fixture):
 def test_orchestrator_cannot_spawn_itself(load_fixture):
     assert "Agent(orchestrator)" in settings(
         load_fixture("greenfield_prd"))["permissions"]["deny"]
+
+
+@pytest.mark.parametrize("entry", [
+    "Bash(rm -rf:*)", "Bash(git push --force:*)", "Bash(git push -f:*)",
+    "Bash(git reset --hard:*)", "Bash(docker compose down -v:*)",
+])
+def test_destructive_commands_are_denied_individually(entry, load_fixture):
+    assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
+
+
+@pytest.mark.parametrize("entry", [
+    "Bash(git add -A:*)", "Bash(git add .:*)", "Bash(git commit -a:*)",
+    "Bash(git stash:*)",
+])
+def test_staging_sweeps_are_denied(entry, load_fixture):
+    """These four are why a shared git index absorbs one agent's work into
+    another's commit. They are the kit's reason for existing, so assert each."""
+    assert entry in settings(load_fixture("services_layout"))["permissions"]["deny"]
+
+
+def test_every_toolchain_command_is_allowed(load_fixture):
+    for name in FIXTURES:
+        cfg = load_fixture(name)
+        allow = settings(cfg)["permissions"]["allow"]
+        for key in ("test", "format", "lint", "types", "pm"):
+            assert f"Bash({cfg.toolchain[key]}:*)" in allow, (name, key)
+
+
+def test_no_empty_permission_rule_is_emitted(load_fixture):
+    """Regression for the Bash(:*) defect: an empty toolchain value used to render
+    a rule with no prefix at all."""
+    for name in FIXTURES:
+        perms = settings(load_fixture(name))["permissions"]
+        for rule in perms["allow"] + perms["deny"]:
+            assert rule.strip(), name
+            assert "()" not in rule and "(:*)" not in rule, (name, rule)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1445,9 +1489,12 @@ Expected: FAIL — `TemplateNotFound: settings.json.j2`
 {% for s in cfg.secrets %}
       "Read({{ s }})",
       "Edit({{ s }})",
+      "Write({{ s }})",
 {% endfor %}
       "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
       "Edit(./.claude/kit.lock.json)",
+      "Write(./.claude/kit.lock.json)",
       "Bash(rm -rf:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
