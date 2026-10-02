@@ -10,17 +10,17 @@ is written by hand today — see *Install into a project* below.
 
 ## Install the plugin
 
-The repository has no remote yet, so use a local-directory marketplace:
-
 ```bash
-claude plugin marketplace add /home/alex/Documents/coding/agentic-kit
+claude plugin marketplace add git@192.168.1.174:alex/agentic-kit.git
 claude plugin install agentic-kit@agentic-kit
 ```
 
-Once pushed, the same thing from a git URL:
+That host is reachable on the LAN and over the tailnet; `gitlab.home.aleksanlab.me` resolves to it
+for the web UI and API, while git itself uses the IP. From a machine that cannot reach it, or while
+developing the kit itself, point the marketplace at the working copy instead:
 
 ```bash
-claude plugin marketplace add git@<forge-host>:<owner>/agentic-kit.git
+claude plugin marketplace add /home/alex/Documents/coding/agentic-kit
 claude plugin install agentic-kit@agentic-kit
 ```
 
