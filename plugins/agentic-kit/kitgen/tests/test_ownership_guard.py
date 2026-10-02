@@ -182,14 +182,12 @@ def test_the_guard_sources_the_shared_library_rather_than_copying_it():
     for fn in ("kit_lexnorm", "kit_candidates", "kit_match_glob", "kit_deny",
                "kit_init", "kit_in", "kit_q"):
         assert not re.search(rf"^{fn}\(\)", body, re.M), f"{fn} is redefined, not reused"
-    # ...and the ones this guard's logic needs must actually be called. kit_lexnorm is
-    # absent on purpose: kit_candidates calls it, the guard does not.
-    for fn in ("kit_init", "kit_in", "kit_q", "kit_candidates", "kit_match_glob",
-               "kit_deny"):
+    # ...and the ones this guard's logic needs must actually be called. `kit_lexnorm` is
+    # absent on purpose (kit_candidates calls it), and so are `kit_in`/`kit_q`: this hook
+    # reads the payload and the lock in one jq call each instead of one per question.
+    for fn in ("kit_init", "kit_candidates", "kit_match_glob", "kit_deny"):
         assert fn in body, f"{fn} is not used at all"
 
-
-# ---- adversarial cases beyond the plan's corpus ----------------------------------
 
 def _plain(tmp_path, cfg):
     return _install(tmp_path, cfg)

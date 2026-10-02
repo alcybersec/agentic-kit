@@ -39,8 +39,13 @@ kit_bail_ok() { exit 0; }
 kit_init() {
   command -v jq >/dev/null 2>&1 || kit_bail_ok
 
-  KIT_INPUT=$(cat 2>/dev/null) || kit_bail_ok
-  [ -n "$KIT_INPUT" ] || kit_bail_ok
+  # A builtin read, not `$(cat)`. These hooks run on the hot path of every tool call,
+  # and `cat` is a whole process to do what `read` does in the shell. `read -d ''`
+  # stops at the first NUL — which JSON never contains — so it consumes stdin to EOF
+  # and then returns non-zero for having found no delimiter. That status is the normal
+  # case, so it is ignored and emptiness is checked instead.
+  IFS= read -r -d '' KIT_INPUT 2>/dev/null || true
+  [ -n "${KIT_INPUT:-}" ] || kit_bail_ok
   printf '%s' "$KIT_INPUT" | jq -e 'type == "object"' >/dev/null 2>&1 || kit_bail_ok
 
   local root="${CLAUDE_PROJECT_DIR:-}"
@@ -115,6 +120,24 @@ kit_match_glob() {
     done
   done <<<"$1"
   return 1
+}
+
+# kit_read_nul <var>... — read NUL-delimited fields from stdin into those variables, in
+# order. Pair it with `jq -j` emitting `field, "\u0000"` per field.
+#
+# The point is ONE jq process instead of one per question: these hooks run on the hot
+# path of every tool call, and a jq call is ~20 ms. The delimiter must be NUL rather
+# than newline, because the values are not newline-free — a `git commit -m` message
+# spans lines, and the first version of this read line-by-line and silently truncated
+# the command at the first newline, so the attribution check stopped firing. A list
+# field is passed as ONE value with newlines inside it, which is already the format
+# kit_match_glob expects.
+kit_read_nul() {
+  local _v
+  for _v in "$@"; do
+    # Non-zero at EOF without a delimiter is the normal case for the last field.
+    IFS= read -r -d '' "$_v" || true
+  done
 }
 
 # kit_is_template <path> — true for a committed example/sample/template file.

@@ -30,22 +30,47 @@ _kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_
 source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
-role=$(kit_in '.agent_type | strings')
+# ONE jq call for the payload, and ONE for the lock.
+#
+# This hook sits on the hot path of every Edit and Write, and it used to ask jq
+# fourteen separate questions — three of the payload, eleven of the lock — each a
+# process. Measured at 308 ms per edit against a ~20 ms floor for `bash -c` plus one
+# jq, which is a real tax on a session that makes hundreds of edits. The lock is a few
+# hundred bytes; jq can answer everything in one pass, so it does.
+#
+# Fields are NUL-delimited, in a fixed order, because the values are not newline-free
+# and a line-based read would truncate them. Each list arrives as one field with
+# newlines inside, which is the format kit_match_glob already wants.
+role=""; path=""; cwd=""
+kit_read_nul role path cwd < <(printf '%s' "$KIT_INPUT" | jq -j '
+  ((.agent_type? // "") | tostring), "\u0000",
+  ((.tool_input.file_path? // "") | tostring), "\u0000",
+  ((.cwd? // "") | tostring), "\u0000"' 2>/dev/null)
+
 [ -n "$role" ] || exit 0          # main thread: the Orchestrator is not guarded
-
-# Only a role the profile describes. `jq -e` to distinguish "no such role" from a role
-# whose `owns` happens to be empty.
-jq -e --arg r "$role" '[.roles[]? | select(.name == $r)] | length > 0' \
-  "$KIT_LOCK" >/dev/null 2>&1 || exit 0
-
-path=$(kit_in '.tool_input.file_path | strings')
 [ -n "$path" ] || exit 0
-kit_candidates "$path" "$(kit_in '.cwd | strings')" || exit 0   # outside the project
 
-critical=$(kit_q '.critical[]?')
-veto=$(jq -r '.roles[]? | select(.veto == true) | .name | strings' "$KIT_LOCK" 2>/dev/null)
-mine=$(jq -r --arg r "$role" '.roles[]? | select(.name==$r) | .owns[]? | strings' "$KIT_LOCK" 2>/dev/null)
-others=$(jq -r --arg r "$role" '.roles[]? | select(.name!=$r) | .name as $n | .owns[]? | strings | "\($n)|\(.)"' "$KIT_LOCK" 2>/dev/null)
+# `present` distinguishes "no such role" from a role whose `owns` happens to be empty:
+# the latter is still a role and must still be refused another role's tree.
+present=""; critical=""; veto=""; mine=""; others=""
+plan=""; strategy=""; risks=""; inherited=""
+kit_read_nul present critical veto mine others plan strategy risks inherited \
+  < <(jq -j --arg r "$role" '
+  ([.roles[]? | select(.name == $r)] | length | tostring), "\u0000",
+  ((.critical // []) | map(strings) | join("\n")), "\u0000",
+  ([.roles[]? | select(.veto == true) | .name | strings] | join("\n")), "\u0000",
+  ([.roles[]? | select(.name == $r) | .owns[]? | strings] | join("\n")), "\u0000",
+  ([.roles[]? | select(.name != $r) | .name as $n | .owns[]? | strings
+    | "\($n)|\(.)"] | join("\n")), "\u0000",
+  ((.spine.plan? // "") | tostring), "\u0000",
+  ((.spine.strategy? // "") | tostring), "\u0000",
+  ((.spine.risks? // "") | tostring), "\u0000",
+  ((.spine.inherited // []) | map(strings) | join("\n")), "\u0000"' \
+  "$KIT_LOCK" 2>/dev/null)
+
+[ "${present:-0}" != "0" ] || exit 0   # an agent_type naming no role is not ours
+
+kit_candidates "$path" "$cwd" || exit 0   # outside the project
 all_cands=("${KIT_CANDS[@]}")
 
 # Every spelling is judged on its own: a symlink inside my tree that points into
@@ -90,14 +115,12 @@ for rel in "${all_cands[@]}"; do
     .claude/settings.json)
       kit_deny "Blocked: ${rel} holds the permission rules, including the secret denies. It is generated from the profile, not edited by agents." ;;
   esac
-  plan=$(kit_q '.spine.plan')
   if [ -n "$plan" ] && [ "$rel" = "${plan#./}" ]; then
     kit_deny "Blocked: ${rel} is the Orchestrator's dispatch state. Subagents never edit it -- emit a handoff note with /handoff instead."
   fi
   # A role must not rewrite the rulebook that binds it: strategy.md holds the floors
   # and the ownership map, and the register is the Orchestrator's by its own header.
-  for key in strategy risks; do
-    p=$(jq -r --arg k "$key" '.spine[$k] // empty | strings' "$KIT_LOCK" 2>/dev/null)
+  for p in "$strategy" "$risks"; do
     if [ -n "$p" ] && [ "$rel" = "${p#./}" ]; then
       kit_deny "Blocked: ${rel} is the operating model, not an agent's to edit -- changing it would let you widen your own boundary or weaken a floor. Raise it with the Orchestrator."
     fi
@@ -110,7 +133,7 @@ for rel in "${all_cands[@]}"; do
     if [ "$rel" = "${p#./}" ]; then
       kit_deny "Blocked: ${rel} is an inherited project document -- the user's source of truth, not an agent's to rewrite. Propose the change in your handoff note and let the user make it."
     fi
-  done <<<"$(kit_q '.spine.inherited[]?')"
+  done <<<"$inherited"
 
   # Mine? Then fine. Another role's and not mine? Blocked. Unowned? Allowed.
   kit_match_glob "$mine" && continue

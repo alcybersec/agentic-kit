@@ -479,6 +479,36 @@ payload arrives as JSON on stdin (`.tool_name`, `.tool_input.command`, `.tool_in
 `{"hookSpecificOutput": {"permissionDecision": "deny"}, "systemMessage": "<reason>"}` on stderr,
 naming the rule and the allowed alternative.
 
+### 6.2b What the hooks cost, and why (measured 2026-10-02)
+
+Every hook sits on the hot path of a tool call, so this is a design constraint and not an
+afterthought. Measured on devbox, 20 runs each, against a floor of ~20 ms for `bash -c` plus one `jq`:
+
+| Tool call | Hooks that fire | Non-kit repo | Kit project |
+|---|---|---|---|
+| Bash | `pre-bash-guard` | 23 ms | **108 ms** (was 193) |
+| Read | `pre-file-guard` | 22 ms | **93 ms** (was 127) |
+| Edit / Write | `pre-file-guard`, `ownership-guard`, `post-edit-format` | 70 ms | **299 ms** (was 528) |
+| Grep, Glob, Task, WebFetch | none | 0 | 0 |
+
+**The rule that gets it there: one `jq` pass per input, never one per question.** The guards asked jq
+up to fourteen separate questions each — `kit_q` and `kit_in` are a process per call — which cost 308 ms
+on an `Edit` in the ownership guard alone. `kit_read_nul` reads a whole fixed-order record from a single
+`jq -j`, and `test_shell_hygiene.py` holds every hook to at most two jq invocations and bans `kit_q`
+and `kit_in` inside one.
+
+Fields are **NUL-delimited, not newline-delimited**. The first single-pass version read line by line and
+silently truncated `$cmd` at its first newline, so a `git commit -m` message — which spans lines by
+definition — stopped being checked for attribution. A list field travels as one value with newlines
+inside it, which is already the format `kit_match_glob` expects.
+
+**The remaining floor is `kit_init`**: ~40 ms of its own, two jq calls to validate the payload and the
+lock, shared by every hook. Going below ~95 ms per hook means moving that correctness gate into each
+hook, which is how the kit acquired a third path matcher once already. Not worth it.
+
+In a repository with no `.claude/kit.lock.json` every hook exits at the lock check, so the cost is pure
+process startup and nothing in the kit can reduce it.
+
 ### 6.2a What `claude plugin validate` does and does not catch
 
 Established empirically by corrupting a copy of the plugin, because the answer decides which checks the

@@ -415,3 +415,24 @@ def test_the_pathspec_exemption_does_not_reopen_the_sweep(tmp_path, command):
     p = make_project(tmp_path)
     r = run_hook(HOOK, bash_payload(command, p), p)
     assert r.returncode == 2, (command, r.stdout, r.stderr)
+
+
+def test_a_multi_line_command_is_read_in_full(tmp_path):
+    """The payload is read with ONE jq call for speed, and the first version of that read
+    line by line — so `$cmd` was truncated at the first newline and every check after it
+    saw half a command. A `git commit -m` message spans lines, so this is the ordinary
+    case, not an edge one. Fields are NUL-delimited now.
+
+    `git stash` sits after a newline here: finding it proves the whole command arrived."""
+    p = make_project(tmp_path)
+    cmd = "echo 'line one\nline two'\ngit stash"
+    r = run_hook(HOOK, bash_payload(cmd, p), p)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "git stash" in r.stderr
+
+
+def test_a_secret_named_after_a_newline_is_still_found(tmp_path):
+    p = make_project(tmp_path, secrets=["./.env"])
+    r = run_hook(HOOK, bash_payload("echo hello\nbase64 ./.env", p), p)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "secret path" in r.stderr

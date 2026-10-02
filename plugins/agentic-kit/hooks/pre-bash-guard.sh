@@ -13,12 +13,28 @@ _kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_
 source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
-cmd=$(kit_in '.tool_input.command')
+# ONE jq call for the payload and ONE for the lock, NUL-delimited in a fixed order.
+#
+# This hook fires on every Bash call — the most frequent tool call in most sessions —
+# and asking jq seven separate questions cost 193 ms against a ~20 ms floor for
+# `bash -c` plus one jq. NUL rather than newline because `$cmd` is a whole command line
+# and a `git commit -m` message spans lines: a line-based read truncated it at the first
+# newline and the attribution check stopped firing. See hooks/lib/kitlock.sh.
+cmd=""; cwd=""
+kit_read_nul cmd cwd < <(printf '%s' "$KIT_INPUT" | jq -j '
+  ((.tool_input.command? // "") | tostring), "\u0000",
+  ((.cwd? // "") | tostring), "\u0000"' 2>/dev/null)
 [ -n "$cmd" ] || exit 0
 
-forge_kind=$(kit_q '.forge.kind')
-forge_cli=$(kit_q '.forge.cli')
-exclusive=$(kit_q '.forge.exclusive')
+forge_kind=""; forge_cli=""; exclusive=""; mention=""; secret_list=""
+kit_read_nul forge_kind forge_cli exclusive mention secret_list < <(jq -j '
+  ((.forge.kind? // "") | tostring), "\u0000",
+  ((.forge.cli? // "") | tostring), "\u0000",
+  ((.forge.exclusive? // false) | tostring), "\u0000",
+  ((.attribution.mention_assistant_in_commits? // false) | tostring), "\u0000",
+  ((.secrets // []) | map(strings) | join("\n")), "\u0000"' "$KIT_LOCK" 2>/dev/null)
+secrets=()
+while IFS= read -r _s; do [ -n "$_s" ] && secrets+=("$_s"); done <<<"$secret_list"
 other=""
 if [ "$exclusive" = "true" ]; then
   case "$forge_kind" in
@@ -223,9 +239,7 @@ check_segment() {
 # `cp .env.example .env`, whose destination word IS the secret path. That copy is
 # the remediation the deny message recommends, so a template-to-secret `cp` is
 # exempted explicitly (it reads nothing secret).
-mapfile -t secrets < <(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
 patterns=$(printf '%s\n' ${secrets[@]+"${secrets[@]}"})
-cwd=$(kit_in '.cwd | strings')
 
 check_secrets() {
   [ "${#secrets[@]}" -gt 0 ] || return 0
@@ -275,7 +289,7 @@ while IFS= read -r seg; do
   if [ "$have_kept" -eq 1 ]; then check_secrets "git commit$kept"; else check_secrets "$seg"; fi
 done < <(printf '%s\n' "$cmd" | tr ';|&\n()`' '\n')
 
-if [ "$is_commit" -eq 1 ] && [ "$(kit_q '.attribution.mention_assistant_in_commits')" != "true" ]; then
+if [ "$is_commit" -eq 1 ] && [ "$mention" != "true" ]; then
   # Attribution-SHAPED text only; a message may legitimately say "anthropic sdk".
   # Herestring, not a pipe: `grep -q` exits on the first match and `pipefail` would
   # turn the writer's SIGPIPE into a failed pipeline. Here that failed OPEN — an

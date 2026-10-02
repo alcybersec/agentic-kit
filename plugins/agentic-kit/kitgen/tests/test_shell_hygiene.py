@@ -58,3 +58,42 @@ def test_the_raw_payload_is_never_exported(path):
     for var in holders:
         assert not re.search(rf"^\s*export\b[^\n]*\b{var}\b", body, re.M), (
             f"{path.name}: {var} holds the raw payload and must not be exported")
+
+
+HOT_PATH = [p for p in SCRIPTS if p.parent.name == "hooks"]
+
+
+@pytest.mark.parametrize("path", HOT_PATH, ids=lambda p: p.name)
+def test_a_hook_asks_jq_at_most_twice(path):
+    """A performance property, invisible in behaviour and easy to lose.
+
+    These run on the hot path of every tool call and a jq process costs ~20 ms here.
+    Each hook has at most two things to ask — one pass over the payload, one over the
+    lock — and asking per-question instead cost 308 ms per edit in the ownership guard
+    and 193 ms per Bash call in the bash guard. `kit_q`/`kit_in` are one process per
+    call, so they are banned here too; `kit_read_nul` with a single `jq -j` replaces them.
+
+    kit_init's own two calls are in the library and are not counted: they are the
+    correctness gate every hook shares.
+    """
+    body = path.read_text()
+    code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
+    n = code.count("jq -")
+    assert n <= 2, f"{path.name}: {n} jq invocations; one pass for the payload, one for the lock"
+    for helper in ("kit_q ", "kit_in "):
+        assert helper not in code, (
+            f"{path.name}: {helper.strip()} is one jq process per call — read what you "
+            f"need in a single kit_read_nul pass instead")
+
+
+@pytest.mark.parametrize("path", HOT_PATH, ids=lambda p: p.name)
+def test_a_hook_reads_nul_delimited_fields_not_lines(path):
+    """`kit_read_nul` exists because the values are not newline-free: `$cmd` is a whole
+    command line and a `git commit -m` message spans lines. The first single-pass version
+    read line by line, truncated the command at the first newline, and silently stopped
+    enforcing the attribution rule."""
+    code = path.read_text()
+    if "kit_read_nul" not in code:
+        pytest.skip("no single-pass read in this hook")
+    assert "jq -j" in code, "kit_read_nul needs `jq -j` emitting NUL after each field"
+    assert '"\\u0000"' in code or '"\u0000"' in code, "fields must be NUL-delimited"

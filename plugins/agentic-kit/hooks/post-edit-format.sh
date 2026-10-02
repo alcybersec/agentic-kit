@@ -11,7 +11,10 @@ _kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_
 source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
-path=$(kit_in '.tool_input.file_path')
+# One jq call for the payload, one for the lock: this runs after every Edit and Write.
+path=""
+kit_read_nul path < <(printf '%s' "$KIT_INPUT" | jq -j '
+  ((.tool_input.file_path? // "") | tostring), "\u0000"' 2>/dev/null)
 [ -n "$path" ] || exit 0
 
 # Source files only. A formatter configured for one language would mangle or
@@ -21,7 +24,9 @@ case "$path" in
   *) exit 0 ;;
 esac
 
-fmt=$(kit_q '.toolchain.format')
+fmt=""
+kit_read_nul fmt < <(jq -j '((.toolchain.format? // "") | tostring), "\u0000"' \
+  "$KIT_LOCK" 2>/dev/null)
 [ -n "$fmt" ] || exit 0
 
 # The command is a configured string, split on purpose into words; globbing is

@@ -21,7 +21,16 @@ kit_init
 
 # The harness re-fires this hook after a block; blocking again only burns turns until
 # its own cap (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP). Its guidance: succeed while this is true.
-[ "$(kit_in '.stop_hook_active')" != "true" ] || exit 0
+# One pass over the payload for all four fields it needs. NUL-delimited, because
+# `last_assistant_message` is a whole reply and spans lines by definition.
+active=""; msg=""; transcript=""; parent_transcript=""
+kit_read_nul active msg transcript parent_transcript < <(printf '%s' "$KIT_INPUT" | jq -j '
+  ((.stop_hook_active? // false) | tostring), "\u0000",
+  ((.last_assistant_message? // "") | tostring), "\u0000",
+  ((.agent_transcript_path? // "") | tostring), "\u0000",
+  ((.transcript_path? // "") | tostring), "\u0000"' 2>/dev/null)
+
+[ "$active" != "true" ] || exit 0
 
 # The note must appear in AT LEAST ONE source; block only when neither has it. "First
 # source decides" would block a note emitted earlier whenever the agent adds any closing
@@ -35,7 +44,6 @@ re='^[[:space:]*#]*TASK [A-Za-z0-9._-]+ (—|–|-) (COMPLETE|PARTIAL|BLOCKED)'
 # separator may be an em dash, en dash or hyphen. The ID must be real, so the
 # format described as "TASK <ID> — ..." does not satisfy it.
 
-msg=$(kit_in '.last_assistant_message | strings')
 # A herestring, NOT `printf ... | grep -q`. `grep -q` exits on the first match, and
 # under `set -o pipefail` a `printf` still writing then dies of SIGPIPE and makes the
 # whole pipeline report failure — so the hook read "no note" and blocked a task that
@@ -43,8 +51,7 @@ msg=$(kit_in '.last_assistant_message | strings')
 # is early in a long message. Fail-closed, on the one gate that validates handoffs.
 if [ -n "$msg" ] && grep -qE "$re" <<<"$msg"; then exit 0; fi
 
-transcript=$(kit_in '.agent_transcript_path | strings')
-{ [ -n "$transcript" ] && [ -f "$transcript" ]; } || transcript=$(kit_in '.transcript_path | strings')
+{ [ -n "$transcript" ] && [ -f "$transcript" ]; } || transcript="$parent_transcript"
 if [ -z "$transcript" ] || [ ! -f "$transcript" ]; then
   # Nothing to read the transcript from: judge the message alone, or stay inert.
   [ -n "$msg" ] || exit 0

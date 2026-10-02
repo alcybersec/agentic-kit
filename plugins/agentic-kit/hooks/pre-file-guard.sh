@@ -13,17 +13,23 @@ _kit_dir="${BASH_SOURCE[0]%/*}"; [ "$_kit_dir" != "${BASH_SOURCE[0]}" ] || _kit_
 source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
-path=$(kit_in '.tool_input.file_path | strings')
+# One jq call for the payload and one for the lock, NUL-delimited: this fires on every
+# Read, Edit and Write, and a jq process is ~20 ms. See hooks/lib/kitlock.sh.
+path=""; cwd=""; patterns=""
+kit_read_nul path cwd < <(printf '%s' "$KIT_INPUT" | jq -j '
+  ((.tool_input.file_path? // "") | tostring), "\u0000",
+  ((.cwd? // "") | tostring), "\u0000"' 2>/dev/null)
 [ -n "$path" ] || exit 0
 
-kit_candidates "$path" "$(kit_in '.cwd | strings')" || exit 0   # outside the project
+kit_candidates "$path" "$cwd" || exit 0   # outside the project
 
 # A committed *.example / *.sample / *.template / *.dist file is not the secret --
 # it is the very thing the deny message below tells the agent to read instead, so
 # blocking it recommended a path this guard refused.
 kit_drop_templates || exit 0
 
-patterns=$(jq -r '.secrets[]? | strings' "$KIT_LOCK" 2>/dev/null)
+kit_read_nul patterns < <(jq -j '
+  ((.secrets // []) | map(strings) | join("\n")), "\u0000"' "$KIT_LOCK" 2>/dev/null)
 if kit_match_glob "$patterns"; then
   kit_deny "Blocked: ${KIT_MATCHED_REL} matches the secret path pattern '${KIT_MATCHED}' (profile \"secrets\" in .claude/kit.yaml). Do not read, edit or print it. If you need the file's shape, use the committed .example template (e.g. .env.example); if you need a value, ask the user to supply it."
 fi
