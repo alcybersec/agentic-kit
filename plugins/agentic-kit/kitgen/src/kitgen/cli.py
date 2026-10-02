@@ -130,6 +130,24 @@ def main(argv: list[str] | None = None) -> int:
     for a in advise(manifest, cfg):
         print(f"advice: {a}", file=sys.stderr)
 
+    # The profile is normally `.claude/kit.yaml` itself — §4.2 calls it the keystone —
+    # and the manifest writes that path too, so rendering would write over its own
+    # input. A first install of a hand-written profile therefore clashed with itself
+    # and returned 3 with no way forward but --force, which on a first install is the
+    # one thing the docs warn against. When input and output are the same file, leave
+    # it alone: it is already the source of truth, and the rendered form would drop the
+    # comments §5.1 says it may carry. Found by following the README's own steps.
+    profile_out = args.out / ".claude/kit.yaml"
+    try:
+        same_profile = (profile_out.exists()
+                        and args.profile.resolve() == profile_out.resolve())
+    except OSError:
+        same_profile = False
+    if same_profile:
+        del manifest[".claude/kit.yaml"]
+        print(f"keeping {profile_out} — it is the profile this render read",
+              file=sys.stderr)
+
     # A clash is a FILE where the manifest wants a file: --force overwrites it,
     # subject to is_preserved. Anything else in the way is a blocker, which
     # --force does not clear -- see _blockers.
