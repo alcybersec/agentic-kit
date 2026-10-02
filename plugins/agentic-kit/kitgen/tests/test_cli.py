@@ -419,3 +419,130 @@ def test_dry_run_predicts_the_force_split(tmp_path, capsys):
     for rel, text in seeded.items():
         assert (tmp_path / rel).read_text() == text, rel
     assert (tmp_path / "CLAUDE.md").read_text() == "STALE"
+
+
+# --- --merge: retrofitting a project that already has its own files -------------
+
+CURATED_CLAUDE = """# Acme Ledger
+
+## Hard-won notes
+
+`glab config get host` answered correctly from the git remote while the config file
+still said gitlab.com. Do not trust the config file.
+"""
+
+CURATED_SETTINGS = """{
+  "permissions": {
+    "allow": ["Bash(make:*)", "Bash(docker ps:*)"],
+    "ask": ["Bash(ssh:*)"],
+    "deny": ["Bash(rm -rf /:*)"]
+  },
+  "env": {"MY_OWN": "keepme"},
+  "disableBypassPermissionsMode": "disable"
+}
+"""
+
+
+def _retrofit(tmp_path):
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text(CURATED_CLAUDE)
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude/settings.json").write_text(CURATED_SETTINGS)
+    return main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path), "--merge"])
+
+
+def test_merge_keeps_the_projects_claude_md_content(tmp_path, capsys):
+    """§7.2's normative rule, and the reason it exists: that note cost someone real
+    time, and a generated file must not overwrite it."""
+    assert _retrofit(tmp_path) == 0
+    body = (tmp_path / "CLAUDE.md").read_text()
+    err = capsys.readouterr().err
+    assert "## Project-specific notes" in body
+    assert "Do not trust the config file." in body
+    assert "glab config get host" in body
+    # And the kit's own scaffolding is there too, above the notes.
+    assert body.index("Agent | Owns") < body.index("## Project-specific notes")
+    assert "your content kept" in err
+
+
+def test_merge_is_idempotent_on_claude_md(tmp_path):
+    """A second retrofit must refresh the scaffolding and keep the notes ONCE, not nest
+    one copy inside another."""
+    assert _retrofit(tmp_path) == 0
+    first = (tmp_path / "CLAUDE.md").read_text()
+    # A REPEAT retrofit needs --force as well: --merge exempts those two paths only, so
+    # everything the first run wrote is still a clash. That is the safe default — a
+    # second retrofit must not quietly overwrite the spine — and §7.1a keeps the living
+    # documents even under --force.
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--merge", "--force"]) == 0
+    second = (tmp_path / "CLAUDE.md").read_text()
+    assert second == first
+    assert second.count("## Project-specific notes") == 1
+    assert second.count("Do not trust the config file.") == 1
+
+
+def test_merge_unions_the_permission_lists(tmp_path, capsys):
+    """Never less restrictive than either input, and never destroys a curated list."""
+    assert _retrofit(tmp_path) == 0
+    data = json.loads((tmp_path / ".claude/settings.json").read_text())
+    perms = data["permissions"]
+    for keep in ("Bash(make:*)", "Bash(docker ps:*)"):
+        assert keep in perms["allow"], keep
+    assert "Bash(ssh:*)" in perms["ask"], "a key the kit does not write must survive"
+    assert "Bash(rm -rf /:*)" in perms["deny"]
+    assert any(d.startswith("Read(") for d in perms["deny"]), "the kit's secret denies"
+    assert "Bash(rm -rf:*)" in perms["deny"]
+    assert data["disableBypassPermissionsMode"] == "disable", "unknown keys are kept"
+    assert data["env"]["MY_OWN"] == "keepme", "unrelated env is kept"
+    assert data["env"]["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "1"
+    assert "added" in capsys.readouterr().err
+
+
+def test_merge_reports_an_env_value_it_overrides(tmp_path, capsys):
+    _seed_spine(tmp_path)
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude/settings.json").write_text(
+        '{"env": {"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "4"}}')
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--merge"]) == 0
+    err = capsys.readouterr().err
+    assert "'4' -> '1'" in err and "the kit requires this one" in err
+    data = json.loads((tmp_path / ".claude/settings.json").read_text())
+    assert data["env"]["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "1"
+
+
+def test_merge_refuses_to_touch_unparseable_settings(tmp_path, capsys):
+    """Better to leave it alone and say so than to replace what cannot be read."""
+    _seed_spine(tmp_path)
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude/settings.json").write_text("{not json")
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--merge"]) == 0
+    err = capsys.readouterr().err
+    assert "not valid JSON" in err and "left untouched" in err
+    assert (tmp_path / ".claude/settings.json").read_text() == "{not json", (
+        "the message says it was left untouched, so it must actually be untouched")
+    assert ".claude/settings.json" not in capsys.readouterr().out
+
+
+def test_merge_does_not_excuse_other_clashes(tmp_path):
+    """`--merge` covers exactly two files. Everything else still refuses with 3, so a
+    retrofit cannot quietly overwrite a spine document."""
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text(CURATED_CLAUDE)
+    (tmp_path / "docs").mkdir(exist_ok=True)
+    (tmp_path / "docs/strategy.md").write_text("MY STRATEGY")
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                 "--merge"]) == 3
+    assert (tmp_path / "docs/strategy.md").read_text() == "MY STRATEGY"
+
+
+def test_without_merge_the_curated_files_are_refused_not_replaced(tmp_path):
+    """The default must stay safe: a plain render into a project that has these files
+    returns 3 and writes nothing."""
+    _seed_spine(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text(CURATED_CLAUDE)
+    before = _tree(tmp_path)
+    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 3
+    assert _tree(tmp_path) == before

@@ -29,6 +29,77 @@ from .model import KitConfig
 from .render import is_preserved, render
 from .verify import advise, verify
 
+NOTES_HEADING = "## Project-specific notes"
+
+
+def _merge_claude_md(rendered: str, existing: str) -> str:
+    """Rendered scaffolding, then the project's own content, verbatim.
+
+    §7.2 is normative that a retrofit MUST NOT discard existing `CLAUDE.md` content:
+    that text holds findings that cost real time, and JobOps' note about
+    `glab config get host` answering from the git remote while the config file said
+    otherwise is precisely the kind of thing a generated file must not overwrite.
+
+    Idempotent. A second merge finds its own heading and re-appends only what follows
+    it, so the scaffolding above is refreshed and the notes are kept once rather than
+    nested one inside another.
+    """
+    i = existing.find(NOTES_HEADING)
+    notes = existing[i + len(NOTES_HEADING):] if i != -1 else existing
+    notes = notes.strip("\n")
+    if not notes:
+        return rendered
+    return rendered.rstrip("\n") + f"\n\n{NOTES_HEADING}\n\n" + notes + "\n"
+
+
+def _merge_settings(rendered: str, existing: str) -> tuple[str | None, list[str]]:
+    """Union the permission lists; keep every other key the project already had.
+
+    A curated `settings.json` is not scaffolding. One of the repositories this kit was
+    generalised from carries 326 allow, 176 ask and 20 deny entries — replacing that
+    wholesale is the single most destructive thing an installer could do here.
+
+    `permissions` lists are unioned, existing entries first, so the result is never less
+    restrictive than either input. `env` is the one place the kit insists: the subagent
+    spawn depth is load-bearing for the orchestrator model, so the kit's keys win and the
+    change is reported. Anything else in the existing file is left exactly as it was.
+    """
+    notes: list[str] = []
+    try:
+        old = json.loads(existing)
+    except json.JSONDecodeError as exc:
+        # None means "do not write this path at all". Returning the rendered content
+        # would have replaced the file the message promises to leave alone — which is
+        # what the test for this message caught.
+        return None, [f".claude/settings.json is not valid JSON ({exc}); it was left "
+                      f"untouched and the kit's rules were NOT applied there. Fix or "
+                      f"move it, then re-run."]
+    new = json.loads(rendered)
+    out = dict(old)
+    perms = dict(old.get("permissions") or {})
+    for key, added in (new.get("permissions") or {}).items():
+        if not isinstance(added, list):
+            continue
+        have = [x for x in (perms.get(key) or []) if isinstance(x, str)]
+        fresh = [x for x in added if x not in have]
+        if fresh:
+            notes.append(f"permissions.{key}: added {len(fresh)} kit rule(s) to your {len(have)}")
+        perms[key] = have + fresh
+    if perms:
+        out["permissions"] = perms
+    env = dict(old.get("env") or {})
+    for key, value in (new.get("env") or {}).items():
+        if env.get(key) not in (None, value):
+            notes.append(f"env.{key}: {env[key]!r} -> {value!r} (the kit requires this one)")
+        env[key] = value
+    if env:
+        out["env"] = env
+    return json.dumps(out, indent=2) + "\n", notes
+
+
+MERGEABLE = ("CLAUDE.md", ".claude/settings.json")
+
+
 def _blockers(out: Path, manifest: dict[str, str]) -> list[str]:
     """Existing paths that stand in the way and that `--force` must not remove.
 
@@ -72,6 +143,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--force", action="store_true",
                    help="overwrite generated files (generate-once files are still kept)")
+    r.add_argument("--merge", action="store_true",
+                   help="retrofit an existing project: keep CLAUDE.md's content under "
+                        "'## Project-specific notes' and union settings.json's "
+                        "permission lists instead of replacing either (implies --force "
+                        "for those two files only)")
 
     v = sub.add_parser("verify", help="check that the profile renders a consistent kit and that its "
                           "inherited docs are present on disk")
@@ -134,6 +210,28 @@ def main(argv: list[str] | None = None) -> int:
     # one thing the docs warn against. When input and output are the same file, leave
     # it alone: it is already the source of truth, and the rendered form would drop the
     # comments §5.1 says it may carry. Found by following the README's own steps.
+    merge_notes: list[str] = []
+    if getattr(args, "merge", False):
+        for rel in MERGEABLE:
+            target = args.out / rel
+            if rel not in manifest or not target.is_file():
+                continue
+            try:
+                existing = target.read_text()
+            except OSError as exc:
+                print(f"cannot read {rel} to merge into: {exc}", file=sys.stderr)
+                return 4
+            if rel == "CLAUDE.md":
+                manifest[rel] = _merge_claude_md(manifest[rel], existing)
+                merge_notes.append(f"{rel}: your content kept under {NOTES_HEADING!r}")
+            else:
+                content, notes = _merge_settings(manifest[rel], existing)
+                merge_notes.extend(f"{rel}: {n}" for n in notes)
+                if content is None:
+                    del manifest[rel]
+                else:
+                    manifest[rel] = content
+
     profile_out = args.out / ".claude/kit.yaml"
     try:
         same_profile = (profile_out.exists()
@@ -149,7 +247,9 @@ def main(argv: list[str] | None = None) -> int:
     # subject to is_preserved. Anything else in the way is a blocker, which
     # --force does not clear -- see _blockers.
     blockers = _blockers(args.out, manifest)
-    clashes = sorted(p for p in manifest if (args.out / p).is_file())
+    merged = set(MERGEABLE) if getattr(args, "merge", False) else set()
+    clashes = sorted(p for p in manifest
+                     if (args.out / p).is_file() and p not in merged)
     frozen: list[str] = []
     overwrite: list[str] = []
     if args.force:
@@ -187,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     if overwrite:
         print(f"overwriting {len(overwrite)} generated file(s): {overwrite}",
               file=sys.stderr)
+    for n in merge_notes:
+        print(f"merged {n}", file=sys.stderr)
 
     # Manifest insertion order is the write order AND the order of the emitted
     # `written` list (tests assert on it): kit.yaml before kit.lock.json (spec 5.1

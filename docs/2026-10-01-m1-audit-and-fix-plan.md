@@ -71,7 +71,17 @@ JSON blob. `permissionDecision` is inert, `hookSpecificOutput` is missing its re
    ownership for everyone — the same "self-expansion by the shortest route" argument §6.4 uses to
    refuse `strategy.md`, not followed through.
 
-### RC4 — there is no way in
+### RC4 — there is no way in — **CLOSED 2026-10-02**
+
+`/kit-init` is the way in: it detects what it can, asks in at most two turns for the roster and the
+floors, writes `.claude/kit.yaml`, dry-runs, renders, and ends with `/kit-doctor`. It replaces the
+planned `kit-install`/`kit-retrofit` split, because the detection is identical and the only difference
+between them was whether code already existed. `kitgen render --merge` makes it safe to point at a real
+repository: `CLAUDE.md` keeps its content under `## Project-specific notes` (§7.2's normative rule, now
+implemented) and `settings.json` has its permission lists unioned rather than replaced. There is a
+README, and `M0-S1-ARCH-001` became completable in fix 0.6. Still M2: `/kit-upgrade`.
+
+### RC4 — there is no way in (as audited)
 All eight skills decline without a lock; nothing in M1 creates one; there is no README anywhere; the
 install command exists only in a `cli.py` docstring. The three installer skills are M2. Separately,
 `M0-S1-ARCH-001` — the first task of every install — is un-completable: nobody owns

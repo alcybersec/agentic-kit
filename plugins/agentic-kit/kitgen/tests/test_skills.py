@@ -8,9 +8,10 @@ import yaml
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 EXPECTED = {"next-task", "gate-check", "handoff", "new-adr", "risk",
-            "plan-status", "agent-memory", "orchestrating", "kit-doctor"}
+            "plan-status", "agent-memory", "orchestrating", "kit-doctor",
+            "kit-init"}
 # Skills the user invokes deliberately; the model must not fire them on its own.
-EXPLICIT_ONLY = {"next-task", "gate-check"}
+EXPLICIT_ONLY = {"next-task", "gate-check", "kit-init"}
 
 
 def frontmatter(path: Path) -> dict:
@@ -35,14 +36,41 @@ def test_dispatch_skills_are_user_invoked_only(name):
     assert frontmatter(SKILLS / name / "SKILL.md")["disable-model-invocation"] is True
 
 
-@pytest.mark.parametrize("name", sorted(EXPECTED))
+# `kit-init` is the one skill that runs where there is NO lock — it creates one — so the
+# inertness rule applies to it inverted, and it is the one skill that must name the
+# forges, because reading the forge off the git remote is its job. §6.3's rule is that
+# nothing *assumes* a forge, not that no file names one.
+INSTALLERS = {"kit-init"}
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED - INSTALLERS))
 def test_every_skill_reads_the_lock_and_declines_without_it(name):
     body = (SKILLS / name / "SKILL.md").read_text()
     assert ".claude/kit.lock.json" in body, name
     assert "decline" in body.lower() or "not a kit project" in body.lower(), name
 
 
-@pytest.mark.parametrize("name", sorted(EXPECTED))
+@pytest.mark.parametrize("name", sorted(INSTALLERS))
+def test_an_installer_skill_stops_when_a_lock_already_exists(name):
+    """The inverse of the rule, and it matters more: reinstalling over a live kit would
+    re-interview the user and re-render a project that already has accumulated work."""
+    body = (SKILLS / name / "SKILL.md").read_text()
+    collapsed = " ".join(body.split())
+    assert ".claude/kit.lock.json" in body, name
+    assert "If it exists, stop" in collapsed, name
+    assert "Do not reinstall over a live kit" in collapsed, name
+
+
+@pytest.mark.parametrize("name", sorted(INSTALLERS))
+def test_an_installer_skill_handles_every_forge_kind(name):
+    body = (SKILLS / name / "SKILL.md").read_text().lower()
+    for kind in ("gitlab", "github", "glab", "gh"):
+        assert kind in body, f"{name}: detection must cover {kind}"
+    assert "no remote means `kind: none`" in body, (
+        f"{name}: a project with no remote is the case most easily forgotten")
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED - INSTALLERS))
 def test_no_skill_hardcodes_a_spine_path_or_a_forge(name):
     body = (SKILLS / name / "SKILL.md").read_text()
     assert "docs/strategy.md" not in body, f"{name}: read spine.strategy from the lock"
@@ -82,3 +110,32 @@ def test_gate_check_writes_two_files_and_does_not_author_the_floors_verdict():
         assert heading in raw, heading
     assert "you do not edit that file" in text
     assert "not yours to summarise" in text
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_no_skill_hardcodes_a_spine_path(name):
+    """Spine paths are configurable for every skill, installers included: `kit-init`
+    describes the documents by their profile key, not by where they usually land."""
+    body = (SKILLS / name / "SKILL.md").read_text()
+    assert "docs/strategy.md" not in body, f"{name}: say spine.strategy"
+    assert "docs/plan/README.md" not in body, f"{name}: say spine.plan"
+
+
+def test_kit_init_insists_on_merge_for_an_existing_project():
+    """Without `--merge` the render refuses rather than destroying a curated CLAUDE.md or
+    settings.json — safe, but a dead end. The skill has to know that `--merge` is the
+    answer and not a workaround, because a user who is told only "it refused" will reach
+    for `--force`."""
+    text = " ".join((SKILLS / "kit-init/SKILL.md").read_text().split())
+    assert "you MUST pass `--merge`" in text
+    assert "Project-specific notes" in text
+    assert "unioned" in text and "never replaced" in text
+    assert "--force" in text and "not a workaround" in text
+
+
+def test_kit_init_does_not_delegate_the_roster_to_a_subagent():
+    """The roster and the ownership map are the user's decisions, and a subagent cannot
+    answer for them."""
+    text = " ".join((SKILLS / "kit-init/SKILL.md").read_text().split())
+    assert "Never dispatch a subagent" in text
+    assert "AskUserQuestion" in text

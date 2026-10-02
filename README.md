@@ -35,25 +35,34 @@ Run it after any change under `.claude/` and after updating the plugin.
 
 ## Install into a project
 
-The three installer skills (`/kit-install` greenfield, `/kit-retrofit` mid-project, `/kit-upgrade`)
-are **M2**. Until they ship, write the profile and render it:
-
-1. Copy a starting profile from `plugins/agentic-kit/kitgen/tests/fixtures/*/profile.yaml` — pick the
-   one whose shape matches your repo (`greenfield_prd`, `python_monolith`, `services_layout`) — to
-   `.claude/kit.yaml` and edit it. The schema is §5 of the design document, and
-   `plugins/agentic-kit/kitgen/src/kitgen/model.py` rejects every malformed profile with a message
-   naming the field.
-2. Render:
-
-```bash
-uv run --project ~/Documents/coding/agentic-kit/plugins/agentic-kit/kitgen \
-  kitgen render --profile .claude/kit.yaml --out . --dry-run
+```
+/kit-init
 ```
 
-   Read the manifest, the clashes and anything under `blocked`, then run it again without
-   `--dry-run`.
+That is the whole of it. The skill detects what can be detected — name, toolchain, forge and CI file
+from the git remote, secrets from `.gitignore`, authoritative documents already in `docs/`, the
+directory shape — then asks you, in at most two turns, for the two things it cannot know: **the role
+roster with its path ownership map**, and **the floors** the veto role may block on. It writes
+`.claude/kit.yaml`, dry-runs the render, renders, and finishes with `/kit-doctor`.
 
-3. `/kit-doctor`, to confirm the guards actually fire in this project.
+It stops if `.claude/kit.lock.json` already exists. Reinstalling over a live kit would re-interview you
+and re-render a project that has accumulated work.
+
+**On a project that already has a `CLAUDE.md` or a `.claude/settings.json`**, the render is run with
+`--merge`, and nothing of yours is lost:
+
+- `CLAUDE.md` keeps its content verbatim under `## Project-specific notes`, below the generated
+  scaffolding, and a later re-merge refreshes the scaffolding without duplicating the notes.
+- `.claude/settings.json` has its permission lists **unioned** — never replaced — so the result is
+  never less restrictive than what you had. Keys the kit does not write are left alone. A
+  `settings.json` that is not valid JSON is reported and left untouched rather than replaced.
+
+Without `--merge` a render into such a project refuses with exit 3 and writes nothing, which is the
+safe failure but a dead end; `/kit-init` passes it for you.
+
+If you would rather write the profile by hand, the schema is §5 of the design document, the three
+fixtures under `plugins/agentic-kit/kitgen/tests/fixtures/*/profile.yaml` are worked examples, and
+`model.py` rejects every malformed profile with a message naming the field.
 
 Exit codes are an interface (design §7.1b): `0` written, `1` verification failed and **nothing** was
 written, `2` bad profile, `3` refused to overwrite and **nothing** was written, `4` the write failed
@@ -61,13 +70,28 @@ partway and the tree is incomplete.
 
 ### Re-rendering an installed kit
 
+After editing `.claude/kit.yaml` — to add a role, change the ownership map, or adopt a new plugin
+version:
+
+```bash
+uv run --project ~/Documents/coding/agentic-kit/plugins/agentic-kit/kitgen \
+  kitgen render --profile .claude/kit.yaml --out . --dry-run --force --merge
+```
+
+Read the `overwrite`, `frozen` and `blocked` lists, then run it again without `--dry-run`. The same
+command is in the *Kit* section of every generated `CLAUDE.md`, with `${CLAUDE_PLUGIN_ROOT}` in place
+of the path.
+
 `--force` replaces generated scaffolding and **keeps** what the project has written: `strategy.md`,
 `design.md`, `decisions.md`, `CONTRACTS.md`, `risk-register.md`, `plan/README.md`, the adoption ADR
 and every role's `MEMORY.md`. It lists both sets on stderr before writing.
 
-It **does** replace `CLAUDE.md`, `.claude/settings.json`, the role cards and the lock — a profile
-change has to reach them. So back up a hand-curated `CLAUDE.md` first; preserving it is `/kit-retrofit`'s
-job (M2, design §7.2).
+It replaces the role cards and the lock, and — **unless you pass `--merge`** — `CLAUDE.md` and
+`.claude/settings.json` too, since a profile change has to reach them. Pass `--merge` on any project
+whose `CLAUDE.md` or `settings.json` you care about; `/kit-init` does.
+
+Still M2: `/kit-upgrade`, which would diff a new plugin version's templates against the tree and offer
+the stable-scaffolding changes as a patch (design §7.1a).
 
 ## Day to day
 
@@ -82,6 +106,7 @@ job (M2, design §7.2).
 | `/agent-memory` | the per-role memory convention |
 | `/orchestrating` | dispatch doctrine: worktrees, path-not-paste, atomic commits |
 | `/kit-doctor` | prove the guards are firing |
+| `/kit-init` | install the kit into a project (declines where one exists) |
 
 ## What the guards do, and what they do not
 

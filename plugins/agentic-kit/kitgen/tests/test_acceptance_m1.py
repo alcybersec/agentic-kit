@@ -229,10 +229,16 @@ def test_the_readme_documents_what_exists_and_not_what_does_not():
     assert "kitgen render" in text, "the command that works today must be here"
     assert "kit.lock.json" in text, "inertness is the reason this is safe to install"
     assert "/kit-doctor" in text
-    for m2 in ("/kit-install", "/kit-retrofit", "/kit-upgrade"):
-        i = text.find(m2)
-        assert i != -1, f"{m2} should be named as not-yet-shipped"
-        assert "M2" in text[i - 200:i + 200], f"{m2} must be marked M2 where it appears"
+    assert "/kit-init" in text, "the way in must be the first thing documented"
+    assert "--merge" in text, "a retrofit is the common case and must not be a footnote"
+    # `/kit-upgrade` is the one installer skill still unbuilt, so it must stay marked.
+    i = text.find("/kit-upgrade")
+    assert i != -1, "/kit-upgrade should be named as not-yet-shipped"
+    assert "M2" in text[i - 250:i + 250], "/kit-upgrade must be marked M2 where it appears"
+    for gone in ("/kit-install", "/kit-retrofit"):
+        assert gone not in text, (
+            f"{gone} was superseded by /kit-init; naming it sends the user to a skill "
+            f"that does not exist")
 
 
 # --- the documented install path, followed literally --------------------------

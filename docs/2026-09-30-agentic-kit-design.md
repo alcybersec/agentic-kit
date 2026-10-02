@@ -296,6 +296,7 @@ the official marketplace plugins.
 | `new-adr <title>` | Scaffold `docs/adr/NNNN-<slug>.md`, append to `spine.decisions` index. |
 | `risk` | Add or update a row in `spine.risks`. |
 | `plan-status` | Read-only grounding: milestone, next task, open gates, open risks. |
+| `kit-init` | Install the kit into a project, greenfield or mid-work (added 2026-10-02, replacing the planned `kit-install`/`kit-retrofit` split — the detection is identical and the only difference was whether code existed). Detects name, toolchain, forge and CI from the git remote, secrets from `.gitignore`, authoritative documents, and the directory shape; asks in at most two turns for the roster with its ownership map and the floors; writes `.claude/kit.yaml`; dry-runs; renders with `--merge` where the project already has a `CLAUDE.md` or `settings.json`; finishes with `/kit-doctor`. **Stops if a lock already exists.** User-invoked only, and it never dispatches a subagent: the roster is the user's decision. |
 | `kit-doctor` | Run `bin/kit-doctor.sh`: fire every guard with a payload it must refuse and report which ones did, plus `jq`, the lock's readability, lock-vs-profile freshness, the formatter's presence on PATH, and whether each role card registers the ownership guard. Added 2026-10-01 (fix 1.2). It exists because §4.3's inertness rule makes a **disarmed** guard and a **correctly inert** one indistinguishable: everything exits 0, and Claude Code reads any non-2 exit as "continue". Nothing else in the kit can tell the two apart. Exit 0 all-clear, 1 otherwise, and it states the two things no script can check — workspace trust and Bash. |
 | `agent-memory` | The `.claude/agent-memory/<role>/MEMORY.md` convention: one fact per file, a one-line linked index entry per fact, `[[wikilinks]]` between facts. |
 | `orchestrating` | Dispatch doctrine: pass paths not pasted documents; `git commit --only <path>`; `isolation: "worktree"` when 2+ agents are dispatched in one message or scopes overlap; worktree merge protocol; never `git stash` for recovery. |
@@ -770,13 +771,25 @@ directory, a full disk, a revoked permission mid-run.
 
 ### 7.2 Brownfield preservation rule (normative)
 
-**This binds `kit-retrofit`, which is M2. M1 does not implement it** (recorded 2026-10-02.) The only
-install path M1 ships is `kitgen render`, and `CLAUDE.md` is generated scaffolding there: `--force`
-replaces it. Fix 0.3 made the five living spine documents and all agent memory safe, and deliberately
-did not extend that to `CLAUDE.md`, because a profile change that never reaches it leaves the root
-context describing a project the kit no longer configures. So **do not point `kitgen render --force` at
-a repository with a curated `CLAUDE.md`** until the retrofit skill exists; `--force` now lists every
-file it will overwrite, and `CLAUDE.md` appears in that list.
+**Implemented 2026-10-02 as `kitgen render --merge`**, and `/kit-init` passes it whenever the project
+already has a `CLAUDE.md`. The merge is in the CLI rather than the skill because it is a transformation
+with edge cases — idempotence, an unparseable settings file — and those belong somewhere testable, not
+in prose a model re-derives each time.
+
+- `CLAUDE.md`: the rendered scaffolding, then the project's existing content verbatim under
+  `## Project-specific notes`. **Idempotent**: a second merge finds its own heading and re-appends only
+  what follows it, so the scaffolding is refreshed and the notes are kept once rather than nested.
+- `.claude/settings.json` gets the same protection, which §7.2 did not originally ask for and needs more
+  than `CLAUDE.md` does: one of the repositories this kit was generalised from carries 326 allow, 176
+  ask and 20 deny entries. Permission lists are **unioned**, existing entries first, so the result is
+  never less restrictive than either input; every key the kit does not write is left alone; `env` is the
+  one place the kit insists, because the subagent spawn depth is load-bearing for the orchestrator
+  model, and the override is reported. A file that is not valid JSON is **not written at all** — the
+  message says it was left untouched, and it is.
+
+Without `--merge` a render into such a project still refuses with 3 and writes nothing: the safe
+failure. `--merge` covers exactly those two paths, so a retrofit cannot quietly overwrite a spine
+document.
 
 `kit-retrofit` MUST NOT discard existing `CLAUDE.md` content. Existing content is lifted **verbatim**
 into a `## Project-specific notes` section of the new CLAUDE.md. Rationale: that text holds findings

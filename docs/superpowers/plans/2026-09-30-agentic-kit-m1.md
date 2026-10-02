@@ -1031,8 +1031,9 @@ When the user says "continue", "next task", or runs `/next-task`:
 
 This project uses the `agentic-kit` plugin ({{ cfg.kit_version }}). Its profile is
 `.claude/kit.yaml`; `.claude/kit.lock.json` is generated from it and is what hooks read. Process
-skills, all nine: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-status`,
-`/agent-memory`, `/orchestrating`, `/kit-doctor`.
+skills, all ten: `/next-task`, `/gate-check`, `/handoff`, `/new-adr`, `/risk`, `/plan-status`,
+`/agent-memory`, `/orchestrating`, `/kit-doctor`, `/kit-init` (which installs the kit, so it declines
+here — this project already has one).
 
 Run `/kit-doctor` after any change to `.claude/` and after updating the plugin. The guards exit
 quietly when they cannot run — a missing `jq`, an unparseable lock, a renamed script — so a disarmed

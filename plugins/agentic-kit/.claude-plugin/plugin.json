@@ -1,6 +1,6 @@
 {
   "name": "agentic-kit",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Orchestrator-model agentic development kit: role agents with file-path ownership, gates, risk register, handoff protocol, agent memory, and guard hooks that are inert outside kit projects.",
   "author": {
     "name": "Alex"
