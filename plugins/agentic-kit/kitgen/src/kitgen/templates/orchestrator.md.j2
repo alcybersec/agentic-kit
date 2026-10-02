@@ -2,6 +2,7 @@
 name: orchestrator
 description: Plan, dispatch, validate handoffs, run gate checks, keep the risk register. The default role.
 tools: Read, Glob, Grep, Bash, Agent
+{# Always `inherit`: the Orchestrator is not dispatched, it IS the session. #}
 model: inherit
 ---
 

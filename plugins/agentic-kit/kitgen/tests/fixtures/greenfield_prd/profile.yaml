@@ -24,10 +24,10 @@ milestones:
     - {id: M0, name: Foundations}
     - {id: M1, name: Sync engine}
 roles:
-  - {name: architect, description: "ADRs, contracts, data model.", owns: ["docs/adr/**", "docs/contracts/**"], handoff_extra: [], veto: false}
-  - {name: devops, description: "Compose, CI, packaging.", owns: ["docker/**", "compose.yaml"], handoff_extra: ["SERVICES:", "RUNBOOK:"], veto: false}
-  - {name: qa, description: "Integration and e2e tiers.", owns: ["tests/e2e/**", "tests/integration/**"], handoff_extra: ["COVERAGE DELTA:"], veto: false}
-  - {name: safety, description: "Floors and threat model.", owns: ["tests/safety/**", "docs/security/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true}
+  - {name: architect, description: "ADRs, contracts, data model.", owns: ["docs/adr/**", "docs/contracts/**"], handoff_extra: [], veto: false, model: opus}
+  - {name: devops, description: "Compose, CI, packaging.", owns: ["docker/**", "compose.yaml"], handoff_extra: ["SERVICES:", "RUNBOOK:"], veto: false, model: sonnet}
+  - {name: qa, description: "Integration and e2e tiers.", owns: ["tests/e2e/**", "tests/integration/**"], handoff_extra: ["COVERAGE DELTA:"], veto: false, model: sonnet}
+  - {name: safety, description: "Floors and threat model.", owns: ["tests/safety/**", "docs/security/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true, model: opus}
 floors:
   - "no plaintext credentials in the tree"
   - "tests/safety/** is append-only"

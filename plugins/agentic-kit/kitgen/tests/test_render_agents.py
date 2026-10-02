@@ -21,7 +21,7 @@ def test_every_role_card_declares_its_name_and_description(load_fixture):
             fm = frontmatter(man[f".claude/agents/{r.name}.md"])
             assert fm["name"] == r.name
             assert fm["description"]
-            assert fm["model"] == "inherit"
+            assert fm["model"] == r.model
 
 
 def test_role_card_lists_its_owned_paths_and_forbids_others(load_fixture):
@@ -77,3 +77,41 @@ def test_every_role_card_can_run_the_handoff_skill(load_fixture):
         for r in cfg.roles:
             tools = [t.strip() for t in frontmatter(man[f".claude/agents/{r.name}.md"])["tools"].split(",")]
             assert "Skill" in tools, (name, r.name)
+
+
+def test_each_role_card_declares_its_own_model(load_fixture):
+    import re as _re
+    for name in ("greenfield_prd", "python_monolith", "services_layout"):
+        cfg = load_fixture(name)
+        man = render(cfg)
+        for r in cfg.roles:
+            card = man[f".claude/agents/{r.name}.md"]
+            fm = _re.match(r"^---\n(.*?)\n---\n", card, _re.S).group(1)
+            assert f"model: {r.model}" in fm, (name, r.name, r.model)
+
+
+def test_the_orchestrator_always_inherits(load_fixture):
+    """It is not dispatched — it *is* the session, so any other value would be a claim
+    about what the user should be running."""
+    import re as _re
+    for name in ("greenfield_prd", "python_monolith", "services_layout"):
+        card = render(load_fixture(name))[".claude/agents/orchestrator.md"]
+        fm = _re.match(r"^---\n(.*?)\n---\n", card, _re.S).group(1)
+        assert _re.search(r"^model: inherit\b", fm, _re.M), name
+
+
+def test_the_shipped_rosters_put_judgement_roles_on_the_capable_model(load_fixture):
+    """These are reference rosters, copied as-is. The split they encode: `architect` and
+    the veto role exercise judgement, everyone else works against a contract that
+    contract-first required to exist before they were dispatched."""
+    for name in ("greenfield_prd", "python_monolith", "services_layout"):
+        cfg = load_fixture(name)
+        by = {r.name: r.model for r in cfg.roles}
+        assert by["architect"] == "opus", name
+        assert by[cfg.veto_role.name] == "opus", name
+        for other in set(by) - {"architect", cfg.veto_role.name}:
+            assert by[other] == "sonnet", (name, other)
+        assert "haiku" not in by.values(), (
+            f"{name}: nothing is shipped on haiku — the kit has no evidence about how it "
+            f"handles the handoff evidence rule or a guard refusal, and a reference "
+            f"roster must not guess")

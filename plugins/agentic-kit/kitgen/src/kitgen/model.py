@@ -7,6 +7,16 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 
 CLI_FOR_FORGE = {"gitlab": "glab", "github": "gh", "none": "none"}
+
+# Subagent `model` frontmatter: an alias, a full model ID, or `inherit`.
+MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
+
+# The one alias whose purpose is speed over capability. Deliberately a set of ONE rather
+# than a ranking of the whole lineup: a tier table would be wrong within two releases,
+# and the only judgement the kit actually needs is "is this the cheap one". An alias or
+# a full ID the kit does not recognise is allowed anywhere, because guessing a stranger's
+# capability is worse than trusting the person who typed it.
+CHEAP_MODELS = frozenset({"haiku"})
 DEFAULT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Skill"]
 
 
@@ -67,7 +77,8 @@ def _overlaps(a: str, b: str) -> bool:
     return pa == pb or pa.startswith(pb + "/") or pb.startswith(pa + "/")
 
 
-_ROLE_KEYS = {"name", "description", "owns", "handoff_extra", "tools", "veto"}
+_ROLE_KEYS = {"name", "description", "owns", "handoff_extra", "tools", "veto",
+              "model"}
 _MAPPING_SECTIONS = ("attribution", "spine", "milestones", "test_tiers",
                      "toolchain")
 _LIST_SECTIONS = ("load_order", "roles", "floors", "secrets")
@@ -107,6 +118,13 @@ class Role:
     handoff_extra: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=lambda: list(DEFAULT_TOOLS))
     veto: bool = False
+    # Which model this role is dispatched on. `inherit` means the session's, which is
+    # what the Orchestrator always uses — it *is* the session. Per role because the
+    # roster already splits along the line that matters: `architect` and the veto role
+    # exercise judgement, while an implementing role works against a contract that
+    # contract-first required to exist before it was dispatched, which is the condition
+    # under which a cheaper model is reasonable.
+    model: str = "inherit"
 
 
 @dataclass(frozen=True)
@@ -170,6 +188,7 @@ class KitConfig:
                 handoff_extra=list(r.get("handoff_extra", [])),
                 tools=list(r.get("tools", DEFAULT_TOOLS)),
                 veto=r.get("veto", False),
+                model=r.get("model", "inherit"),
             )
             for r in d["roles"]
         ]
@@ -289,6 +308,36 @@ class KitConfig:
                     f"match it root-anchored against the whole path while "
                     f"settings.json hands it to Claude Code's own path matching, and "
                     f"the two only agree on the './' form.")
+
+        for role in self.roles:
+            m = role.model
+            if not isinstance(m, str) or not m.strip():
+                raise ConfigError(
+                    f"role {role.name!r} model must be a non-empty string, got {m!r}")
+            if m != "inherit" and m not in MODEL_ALIASES and not m.startswith("claude-"):
+                raise ConfigError(
+                    f"role {role.name!r} model {m!r} is not 'inherit', one of "
+                    f"{list(MODEL_ALIASES)}, or a full model ID beginning 'claude-'. A "
+                    f"value Claude Code cannot resolve is not reported until the "
+                    f"subagent is dispatched — which is mid-task, with a role card "
+                    f"already written and a task already assigned.")
+
+        # The one combination the kit refuses. The veto role produces the Floors
+        # dimension of every gate and signs it APPROVE or VETO, which the Orchestrator
+        # cannot override; it is also the role whose misses are silent, because a floor
+        # nobody tests reads exactly like a floor that holds. Downgrading it is the one
+        # model choice that weakens the kit's only hard gate, so it is an error and not
+        # an advisory — advice is for findings whose remedy is a judgement call, and this
+        # one has a clear answer. To run the whole project on a cheap model, choose it
+        # for the session; `inherit` then carries it everywhere, deliberately.
+        if self.veto_role.model in CHEAP_MODELS:
+            raise ConfigError(
+                f"veto role {self.veto_role.name!r} may not run on "
+                f"{self.veto_role.model!r}: it produces the Floors dimension of every "
+                f"gate and its VETO is not overridable, and a floor it fails to test "
+                f"reads exactly like a floor that holds. Use 'inherit' or a more capable "
+                f"model. If you want the cheap model everywhere, set it for the session "
+                f"instead.")
 
         # `critical` reaches the same matcher as `owns`, so it carries the same
         # normalisation rule — which also rules out a leading './', because '.' is a

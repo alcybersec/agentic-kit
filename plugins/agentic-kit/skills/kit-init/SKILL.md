@@ -66,10 +66,25 @@ Rules the map must satisfy, so check them before you ask:
 - `docs/gates/**` and the contracts file stay unowned. The first is written by two roles at a gate;
   the second is written by whoever implements a contract first.
 
-**Turn 2 — the floors and the rest.** The floors (what must never regress — the one thing the veto
-role can block on, so it must come from the user and not from you), the test tier thresholds,
-whether observability applies, commit attribution, and any `critical` paths: single files only the
-veto role may change, wherever they sit in the ownership map.
+**Turn 2 — the floors, the models, and the rest.** The floors (what must never regress — the one thing
+the veto role can block on, so it must come from the user and not from you), the test tier thresholds,
+whether observability applies, commit attribution, any `critical` paths (single files only the veto role
+may change, wherever they sit in the ownership map), and **which model each role runs on**.
+
+For the models, propose this and let the user adjust — do not ask role by role:
+
+- `architect` and the veto role on the most capable model. They exercise judgement, and the veto role's
+  misses are silent: a floor nobody tested reads exactly like a floor that holds.
+- every implementing and wiring role on the standard model. Contract-first means they are dispatched
+  against a recorded contract and stated acceptance criteria, which is the case where that is
+  reasonable.
+- the Orchestrator is not asked about: it is the session.
+
+Say what it costs and what it saves in one line — a milestone is dozens of dispatches, so this is the
+largest single cost lever in the design — and say that `inherit` everywhere is the conservative choice
+if they would rather not split. Do not propose the cheap model for anything: the handoff protocol runs
+on honesty about test evidence and a guard refusal has to be read and routed rather than retried, and
+neither has been tested on one. The profile refuses it for the veto role outright.
 
 ## 3. Write the profile
 

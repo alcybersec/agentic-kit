@@ -2,7 +2,7 @@
 name: {{ role.name }}
 description: {{ role.description }}
 tools: {{ role.tools | join(', ') }}
-model: inherit
+model: {{ role.model }}
 memory: project
 ---
 

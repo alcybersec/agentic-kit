@@ -22,12 +22,12 @@ milestones:
   id_format: "{milestone}-S{sprint}-{OWNER}-{nnn}"
   outline: [{id: M0, name: Foundations}]
 roles:
-  - {name: architect, description: "ADRs and contracts.", owns: ["docs/adr/**"], handoff_extra: [], veto: false}
-  - {name: backend, description: "API and business logic.", owns: ["src/ledger/api/**", "src/ledger/services/**"], handoff_extra: [], veto: false}
-  - {name: data, description: "Models, migrations, repositories.", owns: ["src/ledger/models/**", "alembic/**"], handoff_extra: ["MIGRATION:", "PII COLUMNS:"], veto: false}
-  - {name: devops, description: "CI and containers.", owns: ["docker/**", ".github/workflows/**"], handoff_extra: ["SERVICES:", "RUNBOOK:"], veto: false}
-  - {name: qa, description: "Test tiers.", owns: ["tests/integration/**", "tests/e2e/**"], handoff_extra: ["COVERAGE DELTA:"], veto: false}
-  - {name: safety, description: "Floors.", owns: ["tests/safety/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true}
+  - {name: architect, description: "ADRs and contracts.", owns: ["docs/adr/**"], handoff_extra: [], veto: false, model: opus}
+  - {name: backend, description: "API and business logic.", owns: ["src/ledger/api/**", "src/ledger/services/**"], handoff_extra: [], veto: false, model: sonnet}
+  - {name: data, description: "Models, migrations, repositories.", owns: ["src/ledger/models/**", "alembic/**"], handoff_extra: ["MIGRATION:", "PII COLUMNS:"], veto: false, model: sonnet}
+  - {name: devops, description: "CI and containers.", owns: ["docker/**", ".github/workflows/**"], handoff_extra: ["SERVICES:", "RUNBOOK:"], veto: false, model: sonnet}
+  - {name: qa, description: "Test tiers.", owns: ["tests/integration/**", "tests/e2e/**"], handoff_extra: ["COVERAGE DELTA:"], veto: false, model: sonnet}
+  - {name: safety, description: "Floors.", owns: ["tests/safety/**"], handoff_extra: ["FLOOR DELTA:", "VETO:"], veto: true, model: opus}
 floors: ["no plaintext credentials in the tree"]
 test_tiers: {unit: 85, integration: 75, floor: 95}
 toolchain: {pm: poetry, test: "poetry run pytest", format: "black", lint: "ruff check", types: mypy}

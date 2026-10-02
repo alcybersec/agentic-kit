@@ -162,6 +162,7 @@ toolchain:
 secrets: ["./.env", "./secrets/**", "./config/profile.yaml"]
 observability: true                # when true, the "ships with the feature" rule and handoff line apply
 critical: []                       # optional: paths only the veto role may change, whoever owns them
+# roles[].model                     # optional, default 'inherit': which model dispatches this role
 ```
 
 ### 5.1 The generated lock sidecar
@@ -239,6 +240,17 @@ critical: []                       # optional: paths only the veto role may chan
 - Role entries MUST carry no unknown keys. A misspelled `handoff_extra` would otherwise load as an
   empty list, and §9.1's per-role handoff check passes vacuously on an empty list — so the role card
   would render with no handoff lines and nothing downstream would notice.
+- `roles[].model` is **optional** and defaults to `inherit`. Accepted: `inherit`, an alias
+  (`opus`, `sonnet`, `haiku`, `fable`), or a full model ID beginning `claude-`. Anything else is
+  rejected at the profile, because Claude Code does not report an unusable value until the subagent is
+  dispatched — mid-task, with the role card written and the work assigned.
+- **The veto role may not run on `haiku`.** It produces the Floors dimension of every gate and its VETO
+  is not overridable, and a floor it fails to test reads exactly like a floor that holds: the failure is
+  silent, which is why this is an error and not an advisory. `CHEAP_MODELS` is a set of **one** on
+  purpose — a tier table ranking the whole lineup would be wrong within two releases, and the only
+  judgement the kit actually needs is "is this the cheap one". An alias or ID it does not recognise is
+  allowed anywhere, because guessing a stranger's capability is worse than trusting whoever typed it.
+  To run everything cheaply, choose that model for the *session*; `inherit` then carries it everywhere.
 - `critical` is **optional** and defaults to empty. Each entry carries the same normalisation rule as
   an `owns` glob — which also rules out a leading `./`, since `.` is a rejected segment — because the
   ownership guard matches both with the same code. A `critical` path deliberately **may** sit inside
@@ -827,6 +839,39 @@ existing `CLAUDE.md`/`AGENTS.md`; candidate secret paths.
 The discriminator is **whether source code exists**, not whether documentation exists. A new project
 folder holding only a PRD is greenfield. `kit-install` therefore derives the role roster from the
 architecture described in the documentation; `kit-retrofit` derives it from the directories that exist.
+
+### 8.2a Which model each role runs on (added 2026-10-02)
+
+Until this was asked, every card said `model: inherit` and nothing in the spec, the schema or the plan
+mentioned models at all — an unexamined default rather than a decision. It also suppressed a lever the
+user already had: `CLAUDE_CODE_SUBAGENT_MODEL` sets a default for all subagents, and `inherit` in the
+frontmatter overrides it.
+
+The roster splits along the line that matters, which is why this belongs per role rather than per
+session:
+
+| Role | What it does | Shipped in all three fixtures |
+|---|---|---|
+| Orchestrator | plans, dispatches, validates, records | **`inherit`, always** — it is not dispatched, it *is* the session |
+| `architect` | contracts, ADRs, module boundaries | `opus` |
+| veto role | floors, threat model, the APPROVE/VETO that cannot be overridden | `opus` |
+| `backend`, `worker`, `frontend`, `data` | implementation against a contract that already exists | `sonnet` |
+| `qa`, `devops` | tier thresholds, CI and compose wiring | `sonnet` |
+
+**Why implementation roles can be cheaper is contract-first, not optimism.** §8 requires a new
+interface to be recorded in `spine.contracts` *before* implementation, and §11's task rows carry
+acceptance criteria. A role dispatched under those conditions is working to a specification, which is
+the case where a smaller model is reasonable. An Orchestrator on `opus` with implementers on `sonnet` is
+the normal shape and the saving is real: a milestone is dozens of dispatches.
+
+**Nothing is shipped on `haiku`, and that is deliberate.** Three of this kit's mechanisms need more than
+code generation: the handoff protocol runs on honesty (*"never write a green you did not run"*, paste
+the command and its last line), a guard refusal has to be **read and routed** rather than retried, and
+the role cards' boundary prose is what actually prevented three boundary crossings in live testing on
+2026-10-02 — in each case before any mechanical guard was reached. The kit has no evidence about how a
+smaller model handles those, and a reference roster that guesses is worse than one that is conservative.
+`haiku` remains available for any non-veto role; it is a decision for someone who has watched that role
+behave, not a default.
 
 ### 8.3 Interview
 

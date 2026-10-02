@@ -139,3 +139,16 @@ def test_kit_init_does_not_delegate_the_roster_to_a_subagent():
     text = " ".join((SKILLS / "kit-init/SKILL.md").read_text().split())
     assert "Never dispatch a subagent" in text
     assert "AskUserQuestion" in text
+
+
+def test_kit_init_proposes_models_without_asking_role_by_role():
+    """Model choice is the largest cost lever in the design and was an unexamined default
+    until 2026-10-02. The skill must propose a split, say what it saves, and not put the
+    cheap model forward — the kit has no evidence about how one handles the handoff
+    evidence rule or a guard refusal."""
+    text = " ".join((SKILLS / "kit-init/SKILL.md").read_text().split())
+    assert "which model each role runs on" in text
+    assert "do not ask role by role" in text
+    assert "the Orchestrator is not asked about" in text
+    assert "Do not propose the cheap model" in text
+    assert "`inherit` everywhere is the conservative choice" in text

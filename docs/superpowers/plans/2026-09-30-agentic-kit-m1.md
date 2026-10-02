@@ -1170,7 +1170,7 @@ not load `role.md.j2` until Step 3b, so the manifest simply lacks the agent path
 name: {{ role.name }}
 description: {{ role.description }}
 tools: {{ role.tools | join(', ') }}
-model: inherit
+model: {{ role.model }}
 memory: project
 ---
 
@@ -1247,6 +1247,7 @@ End every task by running `/handoff`. Your role-specific lines:
 name: orchestrator
 description: Plan, dispatch, validate handoffs, run gate checks, keep the risk register. The default role.
 tools: Read, Glob, Grep, Bash, Agent
+{# Always `inherit`: the Orchestrator is not dispatched, it IS the session. #}
 model: inherit
 ---
 

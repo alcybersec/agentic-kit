@@ -93,6 +93,26 @@ whose `CLAUDE.md` or `settings.json` you care about; `/kit-init` does.
 Still M2: `/kit-upgrade`, which would diff a new plugin version's templates against the tree and offer
 the stable-scaffolding changes as a patch (design §7.1a).
 
+### Which model each role runs on
+
+`roles[].model` in the profile, defaulting to `inherit`. What the fixtures ship, and what `/kit-init`
+proposes:
+
+| | Model | Why |
+|---|---|---|
+| Orchestrator | `inherit` | it is not dispatched — it *is* your session |
+| `architect`, veto role | `opus` | judgement, and the veto role's misses are silent: an untested floor reads exactly like one that holds |
+| implementing and wiring roles | `sonnet` | contract-first means they are dispatched against a recorded contract and stated acceptance criteria |
+
+An Orchestrator on `opus` with implementers on `sonnet` is the normal shape, and a milestone is dozens
+of dispatches, so this is the largest single cost lever here. `inherit` everywhere is the conservative
+choice.
+
+Nothing ships on `haiku`: the handoff protocol runs on honesty about test evidence, and a guard refusal
+has to be read and routed rather than retried. Neither has been tested on a smaller model, so the kit
+does not guess — it stays available for any non-veto role, and **the profile refuses it for the veto
+role outright**.
+
 ## Day to day
 
 | Skill | For |

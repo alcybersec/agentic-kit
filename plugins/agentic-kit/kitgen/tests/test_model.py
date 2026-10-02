@@ -528,3 +528,56 @@ def test_a_critical_path_may_sit_inside_another_roles_tree():
     cfg = KitConfig.from_dict({**MINIMAL, "critical": ["docs/adr/0001-frozen.md"]})
     assert "docs/adr/**" in cfg.roles[0].owns
     assert cfg.critical == ["docs/adr/0001-frozen.md"]
+
+
+# --- per-role model (2026-10-02) ----------------------------------------------
+
+def test_model_defaults_to_inherit():
+    """`inherit` is the safe default: whatever the session runs, every role runs. A kit
+    that silently picked a model would spend the user's money on an assumption."""
+    cfg = KitConfig.from_dict(MINIMAL)
+    assert [r.model for r in cfg.roles] == ["inherit", "inherit"]
+    assert cfg.to_lock()["roles"][0]["model"] == "inherit"
+
+
+@pytest.mark.parametrize("value", ["inherit", "opus", "sonnet", "haiku", "fable",
+                                   "claude-opus-5-5", "claude-sonnet-5"])
+def test_an_accepted_model_value(value):
+    roles = [{**MINIMAL["roles"][0], "model": value}, MINIMAL["roles"][1]]
+    assert KitConfig.from_dict({**MINIMAL, "roles": roles}).roles[0].model == value
+
+
+@pytest.mark.parametrize("value", ["Opus", "sonnet-4", "gpt-4", "best", "inherits",
+                                   "", "   "])
+def test_an_unresolvable_model_value_is_rejected(value):
+    """Claude Code does not report an unusable `model` until the subagent is dispatched —
+    mid-task, with the role card written and the work assigned. Catch it at the profile."""
+    roles = [{**MINIMAL["roles"][0], "model": value}, MINIMAL["roles"][1]]
+    with pytest.raises(ConfigError, match="model"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+def test_the_veto_role_may_not_run_on_the_cheap_model():
+    """The one combination the kit refuses. The veto role produces every gate's Floors
+    dimension and its VETO cannot be overridden, and a floor it fails to test reads
+    exactly like a floor that holds — the failure is silent, which is why this is an
+    error rather than advice."""
+    roles = [MINIMAL["roles"][0], {**MINIMAL["roles"][1], "model": "haiku"}]
+    with pytest.raises(ConfigError, match="may not run on 'haiku'"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+@pytest.mark.parametrize("value", ["inherit", "opus", "sonnet", "claude-opus-5-5"])
+def test_the_veto_role_accepts_anything_not_explicitly_cheap(value):
+    """`CHEAP_MODELS` is a set of one on purpose. Ranking the whole lineup would be wrong
+    within two releases, and an alias the kit does not recognise is trusted rather than
+    guessed at."""
+    roles = [MINIMAL["roles"][0], {**MINIMAL["roles"][1], "model": value}]
+    assert KitConfig.from_dict({**MINIMAL, "roles": roles}).veto_role.model == value
+
+
+def test_a_non_veto_role_may_run_on_the_cheap_model():
+    """The refusal is narrow: one role, for a stated reason. Everything else is the
+    user's call, and a mechanical wiring role is exactly where the saving lives."""
+    roles = [{**MINIMAL["roles"][0], "model": "haiku"}, MINIMAL["roles"][1]]
+    assert KitConfig.from_dict({**MINIMAL, "roles": roles}).roles[0].model == "haiku"
