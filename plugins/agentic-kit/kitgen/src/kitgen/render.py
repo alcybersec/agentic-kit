@@ -29,7 +29,6 @@ SINGLETONS = {
     "risk-register.md.j2": "docs/risk-register.md",
     "CONTRACTS.md.j2": "docs/CONTRACTS.md",
     "adr-0001.md.j2": "docs/adr/0001-adopt-agentic-kit.md",
-    "ownership-guard.sh.j2": ".claude/hooks/ownership-guard.sh",
 }
 
 # Written on a fresh install and never re-rendered over: see design spec §7.1a.

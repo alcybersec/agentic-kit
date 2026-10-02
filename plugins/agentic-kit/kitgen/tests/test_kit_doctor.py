@@ -16,7 +16,8 @@ import pytest
 
 from kitgen.render import render
 
-DOCTOR = __import__("pathlib").Path(__file__).resolve().parents[2] / "bin/kit-doctor.sh"
+PLUGIN = __import__("pathlib").Path(__file__).resolve().parents[2]
+DOCTOR = PLUGIN / "bin/kit-doctor.sh"
 
 
 def install(tmp_path, cfg):
@@ -39,8 +40,25 @@ def install(tmp_path, cfg):
     return tmp_path
 
 
-def doctor(root):
-    return subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True,
+def plugin_copy(tmp_path):
+    """A throwaway copy of the plugin's hooks and bin.
+
+    The guard is a plugin hook now, not a per-project file, so "disarm the guard" can no
+    longer mean editing something in the project. Copying the plugin keeps the sabotage
+    tests honest — they run the real script against a real tree — without mutating the
+    plugin this repository ships.
+    """
+    import shutil
+    dest = tmp_path / "plugin"
+    (dest).mkdir()
+    for part in ("hooks", "bin"):
+        shutil.copytree(PLUGIN / part, dest / part)
+    return dest
+
+
+def doctor(root, plugin=None):
+    script = (plugin / "bin/kit-doctor.sh") if plugin else DOCTOR
+    return subprocess.run(["bash", str(script)], capture_output=True, text=True,
                           env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root)})
 
 
@@ -53,31 +71,54 @@ def test_a_correctly_installed_kit_passes_every_check(tmp_path, load_fixture, fi
 
 
 def test_a_disarmed_ownership_guard_is_reported(tmp_path, load_fixture):
-    """The failure the whole script exists for: a guard that runs, exits 0 and
-    protects nothing looks identical to a correctly inert one."""
+    """The failure the whole script exists for: a guard that runs, exits 0 and protects
+    nothing looks identical to a correctly inert one."""
     root = install(tmp_path, load_fixture("services_layout"))
-    (root / ".claude/hooks/ownership-guard.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-    r = doctor(root)
+    plug = plugin_copy(tmp_path)
+    (plug / "hooks/ownership-guard.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    r = doctor(root, plug)
     assert r.returncode == 1
     assert "ALLOWED a payload that must be refused" in r.stdout
 
 
-def test_a_guard_that_is_not_executable_is_reported(tmp_path, load_fixture):
+def test_a_guard_that_refuses_the_main_thread_is_reported(tmp_path, load_fixture):
+    """The opposite failure, and newly possible: the guard now decides for itself whether
+    a call is the Orchestrator's, so a bug there would block the one agent that must
+    write the plan, the register and the gate bundles."""
     root = install(tmp_path, load_fixture("services_layout"))
-    (root / ".claude/hooks/ownership-guard.sh").chmod(0o644)
-    r = doctor(root)
-    assert r.returncode == 1 and "not +x" in r.stdout
+    plug = plugin_copy(tmp_path)
+    g = plug / "hooks/ownership-guard.sh"
+    body = g.read_text().replace('[ -n "$role" ] || exit 0', '[ -n "$role" ] || role=qa')
+    assert body != g.read_text()
+    g.write_text(body)
+    r = doctor(root, plug)
+    assert r.returncode == 1
+    assert "the main thread was refused" in r.stdout
 
 
-def test_a_role_card_that_does_not_register_the_guard_is_reported(tmp_path, load_fixture):
-    """The other half: a working script nobody registers never runs."""
+def test_a_role_card_still_registering_the_guard_is_reported(tmp_path, load_fixture):
+    """A card from a render before 2026-10-02 points at a script nothing writes any more,
+    and a hook whose script is missing exits non-2 — which Claude Code reads as
+    "continue". Fail-open, silently."""
     root = install(tmp_path, load_fixture("services_layout"))
     card = root / ".claude/agents/architect.md"
-    card.write_text("\n".join(l for l in card.read_text().splitlines()
-                              if "ownership-guard.sh" not in l) + "\n")
+    card.write_text(card.read_text().replace(
+        "memory: project",
+        'memory: project\nhooks:\n  PreToolUse:\n    - matcher: "Edit"\n      hooks:\n'
+        '        - type: command\n          command: bash ".claude/hooks/ownership-guard.sh" architect',
+        1))
     r = doctor(root)
     assert r.returncode == 1
-    assert "not referenced by the card for: architect" in r.stdout
+    assert "still register the guard in frontmatter" in r.stdout
+    assert "architect" in r.stdout
+
+
+def test_a_missing_guard_script_is_reported(tmp_path, load_fixture):
+    root = install(tmp_path, load_fixture("python_monolith"))
+    plug = plugin_copy(tmp_path)
+    (plug / "hooks/ownership-guard.sh").unlink()
+    r = doctor(root, plug)
+    assert r.returncode == 1 and "script missing" in r.stdout
 
 
 def test_a_lock_older_than_the_profile_is_reported(tmp_path, load_fixture):
@@ -109,12 +150,6 @@ def test_equal_mtimes_are_not_drift(tmp_path, load_fixture):
     os.utime(root / ".claude/kit.yaml", ns=(same, same))
     assert "kit.yaml is newer" not in doctor(root).stdout
 
-
-def test_a_missing_hook_script_is_reported(tmp_path, load_fixture):
-    root = install(tmp_path, load_fixture("python_monolith"))
-    (root / ".claude/hooks/ownership-guard.sh").unlink()
-    r = doctor(root)
-    assert r.returncode == 1 and "absent" in r.stdout
 
 
 def test_it_declines_outside_a_kit_project(tmp_path):

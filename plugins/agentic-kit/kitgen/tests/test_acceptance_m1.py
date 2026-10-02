@@ -52,12 +52,13 @@ def install(root, name, *extra):
 
 
 def guard(root, role, rel):
-    """Fire the project's own rendered ownership guard, the way a subagent would."""
+    """Fire the ownership guard the way a subagent's Edit does: the plugin's hook, with
+    the role carried in the payload's `agent_type`."""
     return subprocess.run(
-        ["bash", str(root / ".claude/hooks/ownership-guard.sh"), role],
+        ["bash", str(PLUGIN / "hooks/ownership-guard.sh")],
         input=json.dumps({"tool_name": "Edit",
                           "tool_input": {"file_path": str(root / rel)},
-                          "cwd": str(root)}),
+                          "cwd": str(root), "agent_id": "a0", "agent_type": role}),
         capture_output=True, text=True,
         env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root)})
 
@@ -87,8 +88,8 @@ def test_fixture_renders_verifies_and_writes(name, tmp_path):
         for p in (value if isinstance(value, list) else [value]):
             assert (tmp_path / p).exists(), (key, p)
 
-    g = tmp_path / ".claude/hooks/ownership-guard.sh"
-    assert g.stat().st_mode & 0o111 == 0o111, "a guard without +x cannot run"
+    assert not (tmp_path / ".claude/hooks").exists(), (
+        "nothing is rendered under .claude/hooks any more: the guard is a plugin hook")
 
 
 @pytest.mark.parametrize("name", FIXTURES)

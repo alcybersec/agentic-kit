@@ -29,9 +29,6 @@ from .model import KitConfig
 from .render import is_preserved, render
 from .verify import advise, verify
 
-HOOKS_PREFIX = ".claude/hooks/"
-
-
 def _blockers(out: Path, manifest: dict[str, str]) -> list[str]:
     """Existing paths that stand in the way and that `--force` must not remove.
 
@@ -200,8 +197,6 @@ def main(argv: list[str] | None = None) -> int:
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content)
-            if path.startswith(HOOKS_PREFIX):
-                target.chmod(target.stat().st_mode | 0o111)   # inert unless +x
         except OSError as exc:
             print(f"write failed at {path}: {type(exc).__name__}: {exc}\n"
                   f"already written ({len(written)}): {written}\n"

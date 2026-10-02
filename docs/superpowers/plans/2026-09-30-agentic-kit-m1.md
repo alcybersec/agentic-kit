@@ -1171,12 +1171,6 @@ description: {{ role.description }}
 tools: {{ role.tools | join(', ') }}
 model: inherit
 memory: project
-hooks:
-  PreToolUse:
-    - matcher: "Edit|Write|NotebookEdit|MultiEdit"
-      hooks:
-        - type: command
-          command: bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ownership-guard.sh" {{ role.name }}
 ---
 
 You are the **{{ role.name }}** engineer for {{ project.name }}.
@@ -4367,6 +4361,24 @@ git commit -m "feat(hooks): pre-file-guard denying profile secret paths"
 ---
 
 ## Task 12b: per-role ownership guard
+
+> **Superseded 2026-10-02.** The guard below was rendered into the project and registered by each
+> role card's frontmatter `hooks:` block, with the role passed as `$1`. Frontmatter hooks are
+> **skipped until the workspace is trusted**, and a `-p` session never counts as trusted, so the
+> guard was absent in a fresh clone and in every non-interactive run while §6.2 claimed ownership was
+> enforced. A live install showed that plugin-level `hooks.json` hooks *do* fire inside a subagent —
+> even in an untrusted checkout — and that the payload carries `agent_type`, which is the subagent's
+> frontmatter `name` and therefore the role name.
+>
+> The guard now ships as `plugins/agentic-kit/hooks/ownership-guard.sh`, registered in
+> `hooks/hooks.json`, reading the role from the payload. The template, the `SINGLETONS` entry, the
+> `.claude/hooks/` render, the `+x` pass in `cli.py` and the role card's `hooks:` block are all gone,
+> and so are the two tests that policed the inlined matcher for drift — there is no copy to drift.
+> Two rules now fall out instead of being arranged: no `agent_type` means the Orchestrator, which is
+> never guarded; and an `agent_type` naming no role in the lock is not ours to police.
+>
+> **The code block below is the superseded design, kept for the record.** `check_plan_sync.py` no
+> longer checks it. The committed hook is the authority.
 
 > **Amended after implementation.** The committed template is the authority and differs substantially
 > from the draft. Two things the draft got wrong:

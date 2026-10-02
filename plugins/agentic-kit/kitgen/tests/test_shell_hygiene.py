@@ -15,8 +15,9 @@ import pytest
 
 PLUGIN = Path(__file__).resolve().parents[2]
 SCRIPTS = sorted([*(PLUGIN / "hooks").rglob("*.sh"), *(PLUGIN / "bin").rglob("*.sh")])
-TEMPLATE = PLUGIN / "kitgen/src/kitgen/templates/ownership-guard.sh.j2"
-ALL_SHELL = SCRIPTS + [TEMPLATE]
+# Every shipped script, the ownership guard included: it moved out of a Jinja template
+# into hooks/ on 2026-10-02, so the glob covers it and there is no template to special-case.
+ALL_SHELL = SCRIPTS
 
 assert SCRIPTS, "no shell scripts found — the glob is wrong, not the tree"
 
@@ -41,11 +42,7 @@ def test_no_short_circuiting_consumer_on_the_right_of_a_pipe(path):
 
 @pytest.mark.parametrize("path", ALL_SHELL, ids=lambda p: p.name)
 def test_every_shipped_script_parses(path):
-    """A template is rendered before it runs, so `bash -n` on the .j2 would choke on
-    Jinja. Checked for the scripts; the rendered guard is parsed by its own tests."""
     import subprocess
-    if path.suffix == ".j2":
-        pytest.skip("Jinja source; the rendered output is parsed in test_ownership_guard")
     r = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 

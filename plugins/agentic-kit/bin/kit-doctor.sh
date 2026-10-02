@@ -123,14 +123,15 @@ else
   fi
 fi
 
-# --- the rendered per-role ownership guard ---------------------------------
-guard="$root/.claude/hooks/ownership-guard.sh"
+# --- the per-role ownership guard ------------------------------------------
+# A plugin hook since 2026-10-02, reading the role from the payload's `agent_type`
+# rather than from $1 in a role card's frontmatter registration. So there is no
+# per-project script to find, and nothing to be registered: what has to be checked is
+# that the guard refuses a cross-role edit, and that no card still carries a stale
+# frontmatter block pointing at the script the old design rendered.
+guard="$plugin/hooks/ownership-guard.sh"
 mapfile -t roles < <(jq -r '.roles[]?.name | strings' "$lock" 2>/dev/null)
-if [ ! -f "$guard" ]; then
-  bad "ownership-guard present" "absent: $guard"
-elif [ ! -x "$guard" ]; then
-  bad "ownership-guard executable" "present but not +x, so it cannot run"
-elif [ "${#roles[@]}" -lt 2 ]; then
+if [ "${#roles[@]}" -lt 2 ]; then
   skip "ownership-guard" "fewer than two roles, so no cross-boundary edit exists"
 else
   # The first path the SECOND role owns, edited by the FIRST role: a refusal by
@@ -142,38 +143,55 @@ else
     skip "ownership-guard" "${roles[1]} owns no path to test against"
   else
     run_guard "ownership-guard / cross-role" "$guard" \
-      "$(jq -nc --arg c "$root" --arg p "$root/${victim#./}/probe.txt" \
-          '{tool_name:"Edit",tool_input:{file_path:$p},cwd:$c}')" "${roles[0]}"
+      "$(jq -nc --arg c "$root" --arg p "$root/${victim#./}/probe.txt" --arg a "${roles[0]}" \
+          '{tool_name:"Edit",tool_input:{file_path:$p},cwd:$c,agent_id:"d0",agent_type:$a}')"
   fi
-  # Registration is the other half: a working script nobody registers never runs.
-  missing=""
+  # The main thread must NOT be guarded: the Orchestrator owns no paths and writes the
+  # dispatch state, the register and the gate bundles. A payload with no `agent_type`
+  # standing in for it.
+  if [ -f "$guard" ]; then
+    out=$(CLAUDE_PROJECT_DIR="$root" bash "$guard" 2>&1 <<<"$(jq -nc --arg c "$root" \
+            --arg p "$root/${victim:-src}/probe.txt" \
+            '{tool_name:"Edit",tool_input:{file_path:$p},cwd:$c}')")
+    if [ $? -eq 0 ]; then
+      ok "orchestrator is unguarded" "a payload with no agent_type is allowed"
+    else
+      bad "orchestrator is unguarded" "the main thread was refused; it writes the plan and the register"
+    fi
+  fi
+  # A card from an older render would point at a script no render writes any more, and a
+  # hook whose script is missing exits non-2 — which Claude Code reads as "continue".
+  stale=""
   for r in "${roles[@]}"; do
     card="$root/.claude/agents/$r.md"
-    [ -f "$card" ] || { missing="$missing $r(no card)"; continue; }
-    grep -q 'ownership-guard.sh' "$card" || missing="$missing $r"
+    [ -f "$card" ] || { stale="$stale $r(no card)"; continue; }
+    grep -q 'ownership-guard' "$card" && stale="$stale $r"
   done
-  if [ -n "$missing" ]; then
-    bad "ownership-guard registered" "not referenced by the card for:$missing"
+  if [ -n "$stale" ]; then
+    bad "role cards are current" "these still register the guard in frontmatter, which the plugin now does:$stale -- re-render"
   else
-    ok "ownership-guard registered" "in all ${#roles[@]} role cards"
+    ok "role cards are current" "none registers a frontmatter hook"
   fi
 fi
 
 # --- what no script can test from here ------------------------------------
 echo
 cat <<'NOTE'
-Not checkable from a script, and both are real:
-
-  * Workspace trust. The ownership guard is registered in each role card's
-    frontmatter, and Claude Code SKIPS a subagent's frontmatter hooks until the
-    folder is trusted -- a `-p` session never counts as trusted. The checks above
-    prove the script refuses what it should; they cannot prove Claude Code ran it.
-    Accept the trust prompt in this folder, and treat non-interactive runs as
-    having no per-role ownership enforcement at all.
+Not checkable from a script, and all three are real:
 
   * Bash. Every guard above matches file paths or command strings. A role can
     still reach another role's tree through an interpreter, and no hook here sees
     that. These are nudges with good messages, not a sandbox.
+
+  * --safe-mode disables installed plugins, so in that mode none of this runs.
+    Nothing half-applies, which is the one thing to be glad of about it.
+
+  * Workspace trust no longer hides the ownership guard -- it became a plugin hook
+    on 2026-10-02 and fires in an untrusted checkout and in `-p` sessions. What
+    trust still costs is permissions.allow: the deny rules are kept, so secrets
+    stay blocked, while every allowed toolchain command starts prompting. Accept
+    the trust dialog once, or set
+    projects["<this path>"].hasTrustDialogAccepted: true in ~/.claude.json.
 NOTE
 
 echo

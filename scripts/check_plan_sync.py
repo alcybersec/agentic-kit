@@ -30,7 +30,6 @@ EXPECTED = [
     ("## Task 7:", "## Task 8:", 4, "decisions.md.j2"),
     ("## Task 7:", "## Task 8:", 3, "design.md.j2"),
     ("## Task 5:", "## Task 6:", 2, "orchestrator.md.j2"),
-    ("## Task 12b:", "## Task 13:", 1, "ownership-guard.sh.j2"),
     ("## Task 7:", "## Task 8:", 2, "plan.md.j2"),
     ("## Task 7:", "## Task 8:", 5, "risk-register.md.j2"),
     ("## Task 5:", "## Task 6:", 1, "role.md.j2"),

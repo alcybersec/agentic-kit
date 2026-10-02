@@ -22,7 +22,7 @@ import pytest
 
 from kitgen.render import render
 
-from .hooks_conftest import bash_payload, file_payload, run_hook
+from .hooks_conftest import HOOKS, bash_payload, file_payload, run_hook
 
 LOCK = {
     "secrets": ["./.env", "./secrets/**"],
@@ -91,13 +91,13 @@ def test_plugin_hook_denials_are_prose_on_stderr(tmp_path, label):
 
 
 @pytest.mark.parametrize("fixture", ["python_monolith", "services_layout"])
-def test_rendered_ownership_guard_denials_are_prose_on_stderr(tmp_path, fixture, load_fixture):
-    """The guard is a second, independent copy of `deny`, rendered into the
-    project rather than shipped, so it has to be checked separately."""
+def test_ownership_guard_denials_are_prose_on_stderr(tmp_path, fixture, load_fixture):
+    """The guard used to carry its own copy of `deny`, rendered into the project. Since
+    2026-10-02 it is a plugin hook using `kit_deny` from the shared library — so this
+    checks the same contract through the path a real session takes."""
     man = render(load_fixture(fixture))
-    (tmp_path / ".claude/hooks").mkdir(parents=True)
-    script = tmp_path / ".claude/hooks/ownership-guard.sh"
-    script.write_text(man[".claude/hooks/ownership-guard.sh"])
+    (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
+    script = HOOKS / "ownership-guard.sh"
     (tmp_path / ".claude/kit.lock.json").write_text(man[".claude/kit.lock.json"])
 
     roles = [r["name"] for r in json.loads(man[".claude/kit.lock.json"])["roles"]]
@@ -107,10 +107,11 @@ def test_rendered_ownership_guard_denials_are_prose_on_stderr(tmp_path, fixture,
               (".claude/agents/%s.md" % roles[0], roles[0])]
     for rel, actor in blocks:
         r = subprocess.run(
-            ["bash", str(script), actor],
+            ["bash", str(script)],
             input=json.dumps({"tool_name": "Edit",
                               "tool_input": {"file_path": str(tmp_path / rel)},
-                              "cwd": str(tmp_path)}),
+                              "cwd": str(tmp_path), "agent_id": "a0",
+                              "agent_type": actor}),
             capture_output=True, text=True,
             env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(tmp_path)})
         assert_contract(r, f"ownership-guard/{fixture}/{rel}")

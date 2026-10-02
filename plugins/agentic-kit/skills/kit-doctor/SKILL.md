@@ -32,16 +32,17 @@ that it was.
 | `ALLOWED a payload that must be refused` | that guard is not protecting the project | compare the script against the plugin's copy; re-render to restore it |
 | `refused with no message` | it blocks but tells the agent nothing, so the agent cannot comply | the deny path lost its reason; re-render |
 | `exit N (neither allow nor block)` | the script is erroring out, which Claude Code reads as "continue" | run it by hand and read the error |
-| `not referenced by the card for: <role>` | a working guard that nobody registers never runs for that role | re-render the role cards |
-| `ownership-guard: not +x` | present and unrunnable | `chmod +x .claude/hooks/ownership-guard.sh`, then re-render to find out why it lost the bit |
+| `still register the guard in frontmatter` | the card is from a render before 2026-10-02 and points at a script nothing writes any more; a hook with a missing script exits non-2, which Claude Code reads as "continue" | re-render |
+| `the main thread was refused` | the guard is blocking the Orchestrator, which must write the plan, the register and the gate bundles | a payload with no `agent_type` must exit 0; report it, do not work around it |
 | `toolchain.format is '<x>' but '<x>' is not on PATH` | every edit silently formats nothing | install it, or correct `toolchain.format` and re-render |
 
-**Two things the script cannot check, and it says so in its own output.** Frontmatter hooks — which is
-how the per-role ownership guard is registered — are skipped until the workspace is trusted, and a
-`-p` session never counts as trusted; so the checks prove the script refuses what it should, not that
-Claude Code ran it. And every guard here matches file paths or command strings, so an interpreter
-reaches past all of them. Report both when the output shows them; they are the honest limits of the
-enforcement, not a caveat to bury.
+**What the script cannot check, and it says so in its own output.** Every guard here matches file
+paths or command strings, so an interpreter reaches past all of them, and `--safe-mode` disables
+installed plugins entirely. Workspace trust is no longer on this list: the ownership guard became a
+plugin hook on 2026-10-02 and fires in an untrusted checkout and in `-p` sessions, both verified. What
+trust still costs you is `permissions.allow` — the denies are kept, so secrets stay blocked while every
+allowed toolchain command starts prompting. Report these when the output shows them; they are the
+honest limits of the enforcement, not a caveat to bury.
 
 Finish with one line: `kit-doctor: N checks, M failed` and, if `M > 0`, the single most important
 remedy from the table.

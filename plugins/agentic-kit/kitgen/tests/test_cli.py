@@ -138,18 +138,6 @@ def test_lock_is_written_after_kit_yaml(tmp_path, capsys):
     assert written.index(".claude/kit.yaml") < written.index(".claude/kit.lock.json")
 
 
-def test_hook_scripts_are_executable(tmp_path, capsys):
-    """Every manifest path under .claude/hooks/ must be executable once written.
-    Non-vacuous since Task 12b: ownership-guard.sh is in the manifest, and the
-    assert below pins that so this can never silently go back to an empty set."""
-    _seed_spine(tmp_path)
-    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
-    written = json.loads(capsys.readouterr().out)["written"]
-    hooks = [p for p in written if p.startswith(".claude/hooks/")]
-    assert ".claude/hooks/ownership-guard.sh" in hooks
-    for rel in hooks:
-        assert os.access(tmp_path / rel, os.X_OK), rel
-
 
 def test_verify_reports_problems_and_exits_nonzero(tmp_path, capsys):
     rc = main(["verify", "--profile", str(FIXTURE), "--root", str(tmp_path)])
@@ -182,19 +170,6 @@ def test_a_scalar_where_a_mapping_belongs_exits_two(tmp_path, capsys):
     assert main(["verify", "--profile", str(bad), "--root", str(tmp_path)]) == 2
     assert "spine" in capsys.readouterr().err
 
-
-def test_hook_chmod_is_exercised_with_a_synthetic_hook(tmp_path, monkeypatch):
-    """Non-vacuous companion to the test above: inject a hook into the manifest."""
-    import kitgen.cli as cli
-    real = cli.render
-    monkeypatch.setattr(cli, "render", lambda cfg: {
-        **real(cfg), ".claude/hooks/ownership-guard.sh": "#!/bin/sh\nexit 0\n"})
-    _seed_spine(tmp_path)
-    assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 0
-    mode = (tmp_path / ".claude/hooks/ownership-guard.sh").stat().st_mode
-    assert mode & 0o111 == 0o111          # executable by everyone
-    assert mode & 0o600 == 0o600          # and still readable/writable by the owner
-    assert not os.access(tmp_path / "CLAUDE.md", os.X_OK)
 
 
 def test_frozen_message_is_on_stderr_and_names_both_paths(tmp_path, capsys):
@@ -417,7 +392,7 @@ def test_force_does_overwrite_the_generated_scaffolding(tmp_path, capsys):
     _seed_spine(tmp_path)
     scaffold = ["CLAUDE.md", ".claude/settings.json", ".claude/kit.lock.json",
                 ".claude/kit.yaml", ".claude/agents/orchestrator.md",
-                ".claude/hooks/ownership-guard.sh"]
+]
     for rel in scaffold:
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text("STALE")

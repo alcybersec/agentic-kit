@@ -311,6 +311,7 @@ the same worktree lesson is recorded twice in this user's notes.
 | `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/co-authored-by:.*(claude\|anthropic)\|generated (with\|by).*(claude\|anthropic)\|🤖/i` when `attribution.mention_assistant_in_commits` is false |
 | `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
 | `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file, and **never fails a tool call** |
+| `ownership-guard` | PreToolUse/Edit,Write,NotebookEdit,MultiEdit | a role writing a path another role owns, a `critical` path, or any of the files enforcement itself depends on. Role from the payload's `agent_type`; no `agent_type` (the Orchestrator) or an unknown one exits 0. See §6.4 |
 | `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message`, the subagent's own `agent_transcript_path`, or a `SubagentHandback` call's `input` — any one of the three satisfies it |
 
 Every one exits 0 when the lock is absent (§4.3).
@@ -386,13 +387,11 @@ these hooks match on **command strings**, so neither is a sandbox:
 - **`--safe-mode` disables the kit entirely**, not partially (confirmed 2026-10-02): it starts with
   "CLAUDE.md, skills, installed plugins, hooks, MCP servers, custom commands and agents … disabled".
   That is the unambiguous case — nothing of the kit is present, so nothing can half-apply.
-- **The ownership guard is absent, not lenient, in an untrusted workspace** (recorded 2026-10-01).
-  It is registered by each role card's frontmatter `hooks:` block, and "until you trust the folder,
-  the subagent still runs, but Claude Code skips its frontmatter hooks". A `-p` session **never**
-  counts as trusted. So in a fresh clone before the trust prompt is accepted, and in every
-  non-interactive run, ownership is not enforced at all — while the sentence above says it is. The
-  four plugin-level hooks in `hooks/hooks.json` are unaffected; only the rendered per-role guard
-  depends on trust.
+- **The ownership guard no longer depends on workspace trust** (resolved 2026-10-02). It was
+  registered from the project's own `.claude/agents/` frontmatter, which an untrusted checkout and
+  every `-p` session skip — so it was absent exactly where this document claimed enforcement. It is a
+  plugin hook now (§6.4) and fires in both. What is still true: `--safe-mode` disables installed
+  plugins, so nothing of the kit runs there at all.
 - **Inert by design and broken are indistinguishable from the outside.** Every hook exits 0 when `jq`
   is missing, when the lock is absent or unparseable, or when the script itself has been renamed or
   deleted — and Claude Code treats any non-2 exit as "continue". That is the right default for a
@@ -527,10 +526,27 @@ put the title, body and target branch in the handoff note. Anything in neither l
 
 ### 6.4 Per-role ownership guard
 
-`.claude/hooks/ownership-guard.sh` is rendered into the project and registered by each role card's
-frontmatter `hooks:` block, which passes that role's name as `$1`. Frontmatter hooks "only run while
-that specific subagent is active and are cleaned up when it finishes", so the guard is automatically
-scoped to one role.
+`plugins/agentic-kit/hooks/ownership-guard.sh` ships **with the plugin** and is registered in
+`hooks/hooks.json` for `Edit|Write|NotebookEdit|MultiEdit`. It takes the role from the payload's
+**`agent_type`**, which Claude Code sets to the subagent's frontmatter `name` — the role name for a kit
+role card.
+
+*(Changed 2026-10-02. It used to be rendered into the project and registered by each role card's
+frontmatter `hooks:` block with the role as `$1`. Frontmatter hooks are skipped until the workspace is
+trusted and a `-p` session never counts as trusted, so the guard was **absent** in a fresh clone and in
+every non-interactive run while this section claimed ownership was enforced. A live install confirmed
+that plugin hooks fire inside a subagent even in an untrusted checkout, and that `agent_type` arrives
+on `Edit` and `Write` payloads alike — observed as `"safety"` and `"qa"`.)*
+
+Two rules now follow from the payload rather than from a registration choice:
+
+- **No `agent_type` is the main thread**, which is the Orchestrator: it owns no paths and legitimately
+  writes the dispatch state, the register and the gate bundles. Never guarded, structurally.
+- **An `agent_type` naming no role in the lock** — `Explore`, `general-purpose`, a project's own
+  subagent — exits 0. An ownership map describes the roles it lists and nothing else.
+
+Because the guard now sits beside `lib/kitlock.sh`, it **sources** the matcher instead of inlining it.
+The inlined copy and the two tests that policed it for drift are gone: there is no copy to drift.
 
 It blocks a path **only when another role owns it**. An unowned path crosses nobody's boundary and is
 allowed; without that rule the guard would block `Makefile`, `pyproject.toml`, `README.md` and the
@@ -595,13 +611,12 @@ constrains only the roles the profile describes. The rendered copy's reason for 
 may not be installed in the target project" — inverts once the plugin is the thing providing the hook.
 Worth doing; it closes the one real hole in this guard's coverage.
 
-**Where this guard does not run at all** (recorded 2026-10-01). Frontmatter hooks are skipped until
-the workspace is trusted, and a `-p` session never counts as trusted, so the guard is **absent** in a
-fresh clone before the trust prompt is accepted and in every non-interactive run. It is not a
-containment boundary in any case (§6.2), but the distinction matters for what this document may
-claim: ownership is enforced in an interactive, trusted checkout, and nowhere else. `/kit-doctor`
-reports which guards actually fired, because a disarmed hook and a correctly inert one look the same
-from outside.
+**Where this guard does not run.** As a plugin hook it no longer depends on workspace trust, so the
+earlier limit — absent in a fresh clone and in every `-p` session — is closed. What remains: it matches
+the **file tools only**, so Bash reaches past it (§6.2), and it is gone entirely under `--safe-mode`,
+which disables installed plugins. It was never a containment boundary and still is not. `/kit-doctor`
+reports whether it actually refused a cross-role edit, and whether it correctly left the main thread
+alone — a guard that blocks the Orchestrator would stop the one agent that must write the plan.
 
 It is rendered rather than shipped in the plugin because a project's role card cannot reference
 `${CLAUDE_PLUGIN_ROOT}`; the side benefit is that ownership enforcement survives in a checkout where
