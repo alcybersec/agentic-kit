@@ -367,6 +367,25 @@ these hooks match on **command strings**, so neither is a sandbox:
 - Exclusive file-path ownership **is** enforced, by the per-role guard in §6.4 — but only against the
   file tools. A role can still reach another role's tree through Bash (`sed -i`, a script), because
   that guard matches `Edit|Write|NotebookEdit|MultiEdit` and not command strings.
+- **Plugin hooks DO fire for a subagent's tool calls** — verified on a live install, 2026-10-02.
+  This was the sharpest open question: if they fired only for the main agent, `pre-bash-guard` and
+  `pre-file-guard` would protect the Orchestrator and nothing else. They fire. A `qa` subagent's
+  `git commit` carrying a `Co-Authored-By` line was refused by `pre-bash-guard` with the attribution
+  message, and that rule is the one guard with **no** deny-rule duplicate, so the block can only have
+  come from the hook. The docs agree: *"Hooks from settings files, managed policy settings, and plugins
+  also run inside subagents."* The payload carries `agent_id` and `agent_type`, and `agent_type` is the
+  subagent's frontmatter `name` — observed as `"qa"`. See §6.4 for what that makes possible.
+- **An untrusted workspace drops `permissions.allow` and keeps `permissions.deny`** (verified
+  2026-10-02). Claude Code's own warning names the list: *"Ignoring 20 permissions.allow entries from
+  .claude/settings.json: this workspace has not been trusted"* — and the rendered file held exactly 20
+  allow entries against 31 deny entries, so the denies were retained. The practical shape of an
+  untrusted checkout is therefore: **secret denies still bite, conveniences do not** (every allowed
+  toolchain command starts prompting), and the frontmatter ownership guard is absent. The remedy is in
+  the warning: accept the trust dialog once, or set
+  `projects["<path>"].hasTrustDialogAccepted: true` in `~/.claude.json`.
+- **`--safe-mode` disables the kit entirely**, not partially (confirmed 2026-10-02): it starts with
+  "CLAUDE.md, skills, installed plugins, hooks, MCP servers, custom commands and agents … disabled".
+  That is the unambiguous case — nothing of the kit is present, so nothing can half-apply.
 - **The ownership guard is absent, not lenient, in an untrusted workspace** (recorded 2026-10-01).
   It is registered by each role card's frontmatter `hooks:` block, and "until you trust the folder,
   the subagent still runs, but Claude Code skips its frontmatter hooks". A `-p` session **never**
@@ -562,6 +581,19 @@ therefore an Orchestrator-or-`architect` skill, and §6 says so rather than leav
 
 **Not registered on the orchestrator**, which owns no paths and legitimately writes the dispatch
 state, the risk register and the gate bundles.
+
+**It could stop depending on workspace trust** (opportunity recorded 2026-10-02, not yet implemented).
+A live install showed that plugin-level `hooks.json` hooks fire inside subagents and that the payload
+carries **`agent_type`**, which is the subagent's frontmatter `name` and therefore the role name —
+observed as `"qa"`. The guard currently learns its role from `$1`, passed by the role card's frontmatter
+`hooks:` block, which is exactly what workspace trust skips. Reading `agent_type` from the payload
+instead would let the guard ship in the plugin's `hooks.json`, where it fires regardless of trust and in
+a `-p` session. Two consequences fall out rather than being arranged: a payload with **no**
+`agent_type` is a main-agent call, so "not registered on the orchestrator" becomes structural; and an
+`agent_type` that matches no role in the lock (`Explore`, `general-purpose`) must exit 0, so the guard
+constrains only the roles the profile describes. The rendered copy's reason for existing — "the plugin
+may not be installed in the target project" — inverts once the plugin is the thing providing the hook.
+Worth doing; it closes the one real hole in this guard's coverage.
 
 **Where this guard does not run at all** (recorded 2026-10-01). Frontmatter hooks are skipped until
 the workspace is trusted, and a `-p` session never counts as trusted, so the guard is **absent** in a

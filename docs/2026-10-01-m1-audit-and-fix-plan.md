@@ -330,14 +330,45 @@ open silently (D-M1); `MultiEdit` selects nothing (D-M3, B); `git add -A -- <pat
 coexist with `tests/<sub>/**` so ~60 loose tests and 39 scripts are ungoverned (E-A9); overlap errors
 name an innocent glob (E-A8).
 
-### Open runtime unknowns (Task 17 checklist)
+### Runtime unknowns — **all four resolved 2026-10-02 on a live install**
 
-1. **Do plugin `hooks.json` hooks fire for a subagent's tool calls?** If not, `pre-bash-guard` and
-   `pre-file-guard` protect only the Orchestrator and role agents have no secret or staging guard.
-2. Under `--safe-mode`, settings-file hooks do not run while session hooks do — suggesting the four
-   plugin guards go silent while the rendered ownership guard survives. Asymmetric and undocumented.
-3. Plugin slash-name resolution: `/handoff` vs `agentic-kit:handoff`.
-4. Whether `memory: project` in role frontmatter collides with the kit's `.claude/agent-memory/`.
+Installed from `git@192.168.1.174:alex/agentic-kit.git` at **`--scope local`** into a scratch project,
+so `~/.claude/settings.json` was never touched (verified: mtime unchanged, three days old) and the
+laptop/devbox parity rule held. The kit was rendered there from the installed plugin's own `kitgen`,
+and `bin/kit-doctor.sh` reported all nine checks green against it.
+
+1. **Do plugin hooks fire for a subagent's tool calls? YES.** A `qa` subagent's
+   `git commit --only probe.txt -m "…Co-Authored-By: Claude…"` was refused by `pre-bash-guard` with the
+   attribution message. That rule is the only guard with **no** deny-rule duplicate, so the block can
+   only have come from the hook. The payload carries `agent_id` and `agent_type`; `agent_type` is the
+   subagent's frontmatter `name`, observed as `"qa"`. §6.2's claims hold, and the subagent quoted the
+   refusal as prose and acted on it — fix 0.2 confirmed in a real session.
+2. **`--safe-mode` disables the kit entirely**, not asymmetrically: "CLAUDE.md, skills, installed
+   plugins, hooks, MCP servers, custom commands and agents … disabled". Nothing can half-apply.
+3. **Both `handoff` and `agentic-kit:handoff` resolve.** The listing shows the qualified form, the
+   unqualified one works while the name is unique, and none of the kit's nine collide with the 16
+   skills already installed on this machine. The generated "run `/handoff`" needs no change.
+4. **`memory: project` is not a collision but an alignment.** It resolves to
+   `.claude/agent-memory/<name-of-agent>/` — exactly where the kit renders `MEMORY.md`. Claude Code's
+   own subagent memory and the kit's convention are the same directory, and the ownership guard already
+   keeps each role out of the others'.
+
+**Also observed, and not in any audit:**
+
+- **An untrusted workspace drops `permissions.allow` and keeps `permissions.deny`.** Claude Code's
+  warning names the list, and the rendered file held exactly the 20 allow entries it reported against
+  31 deny entries. So an untrusted checkout keeps the secret denies and loses the conveniences, while
+  the *frontmatter* ownership guard is absent. The remedy is in the warning: accept the trust dialog
+  once, or set `projects["<path>"].hasTrustDialogAccepted: true` in `~/.claude.json`.
+- **A design opportunity, recorded in §6.4 and not implemented.** Because `agent_type` reaches a
+  plugin-level hook, the ownership guard could move from the role card's frontmatter into
+  `hooks.json` and stop depending on workspace trust at all — with "never applied to the orchestrator"
+  becoming structural (no `agent_type` → exit 0) rather than a registration choice.
+- **The prose did work where the mechanism never ran.** Asked to read `.env`, the `architect` subagent
+  declined before any guard was consulted, citing the generated CLAUDE.md's secrets rule by path, and
+  then emitted a complete handoff note unprompted — TASK/OUTPUTS/TESTS/FLOORS/DOWNSTREAM/NOTES, with
+  an honest `TESTS: not run … I'm not claiming the tests pass`. That is the kit's protocol working end
+  to end in a session nobody instructed about it.
 
 ### Confirmed sound (do not re-litigate)
 
