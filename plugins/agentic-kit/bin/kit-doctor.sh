@@ -23,6 +23,9 @@ say()  { printf '%-34s %-7s %s\n' "$1" "$2" "${3:-}"; }
 bad()  { fails=$((fails + 1)); say "$1" "FAIL" "$2"; }
 ok()   { say "$1" "ok" "${2:-}"; }
 skip() { say "$1" "skip" "$2"; }
+# Prints, never fails: for findings whose remedy is a judgement call. A FAIL that
+# cannot be cleared is a FAIL people learn to scroll past.
+note() { say "$1" "note" "$2"; }
 
 printf '%-34s %-7s %s\n' "CHECK" "RESULT" "DETAIL"
 printf '%s\n' "-------------------------------------------------------------------------"
@@ -121,6 +124,28 @@ else
   else
     ok "post-edit-format" "exits 0 silently; ${fmt%% *} left the probe unchanged"
   fi
+fi
+
+# A guard script left behind by a render from before 2026-10-02, when it was written
+# into the project. Nothing invokes it now -- which is exactly the problem: a file
+# that looks like an enforcement hook and never runs invites the belief that ownership
+# is enforced from here. One `rm` clears it, so it is a FAIL rather than a note.
+if [ -f "$root/.claude/hooks/ownership-guard.sh" ]; then
+  bad "no leftover guard script" ".claude/hooks/ownership-guard.sh is from a render before plugin 1.1.0 and is never invoked now -- the guard ships with the plugin. Delete it."
+else
+  ok "no leftover guard script"
+fi
+
+# The profile pins the kit version it was rendered against; the plugin has its own. A
+# difference is not breakage -- `kit_version` is a profile field, so re-rendering does
+# not change it -- but after a release that altered the generated files it means the
+# tree is stale. A note, because the remedy is a decision about the profile.
+plugin_ver=$(jq -r '.version // empty | strings' "$plugin/.claude-plugin/plugin.json" 2>/dev/null)
+kit_ver=$(jq -r '.kit_version // empty | strings' "$lock" 2>/dev/null)
+if [ -n "$plugin_ver" ] && [ -n "$kit_ver" ] && [ "$plugin_ver" != "$kit_ver" ]; then
+  note "kit version" "profile pins ${kit_ver}, installed plugin is ${plugin_ver} -- generated files may predate the plugin. Re-render, and set kit_version in .claude/kit.yaml if you did not mean to pin it."
+elif [ -n "$kit_ver" ]; then
+  ok "kit version" "$kit_ver"
 fi
 
 # --- the per-role ownership guard ------------------------------------------

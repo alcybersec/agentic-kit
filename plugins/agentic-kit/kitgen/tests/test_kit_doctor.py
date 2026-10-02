@@ -173,3 +173,51 @@ def test_a_zero_byte_lock_is_reported(tmp_path, load_fixture):
     (root / ".claude/kit.lock.json").write_text("")
     r = doctor(root)
     assert r.returncode == 1 and "every hook is inert" in r.stdout
+
+
+def test_a_leftover_rendered_guard_is_reported(tmp_path, load_fixture):
+    """A real upgrade finding: plugin 1.0.0 rendered the guard into
+    `.claude/hooks/`, and `--force` on 1.1.0 does not delete files it no longer
+    writes. The orphan is never invoked, which is the problem — a file that looks
+    like an enforcement hook and does nothing invites the belief that ownership is
+    enforced from the project."""
+    root = install(tmp_path, load_fixture("python_monolith"))
+    (root / ".claude/hooks").mkdir(parents=True, exist_ok=True)
+    (root / ".claude/hooks/ownership-guard.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    r = doctor(root)
+    assert r.returncode == 1
+    assert "leftover guard script" in r.stdout and "Delete it" in r.stdout
+
+
+def test_a_kit_version_behind_the_plugin_is_a_note_not_a_failure(tmp_path, load_fixture):
+    """`kit_version` is a PROFILE field, so re-rendering does not change it: a FAIL here
+    could not be cleared by following its own advice, and a FAIL that cannot be cleared
+    is one people learn to scroll past. The fixtures pin 1.0.0 while the plugin is
+    further on, which is exactly the case."""
+    import json as _json
+    root = install(tmp_path, load_fixture("python_monolith"))
+    plugin_ver = _json.loads(
+        (PLUGIN / ".claude-plugin/plugin.json").read_text())["version"]
+    lock = root / ".claude/kit.lock.json"
+    data = _json.loads(lock.read_text())
+    assert data["kit_version"] != plugin_ver, "the fixture must differ for this to test"
+    r = doctor(root)
+    assert "kit version" in r.stdout
+    assert "note" in r.stdout
+    assert f"installed plugin is {plugin_ver}" in r.stdout
+    assert "FAIL" not in r.stdout, r.stdout
+    assert r.returncode == 0
+
+
+def test_a_matching_kit_version_draws_no_note(tmp_path, load_fixture):
+    import json as _json
+    root = install(tmp_path, load_fixture("python_monolith"))
+    plugin_ver = _json.loads(
+        (PLUGIN / ".claude-plugin/plugin.json").read_text())["version"]
+    lock = root / ".claude/kit.lock.json"
+    data = _json.loads(lock.read_text())
+    data["kit_version"] = plugin_ver
+    lock.write_text(_json.dumps(data, indent=2, sort_keys=True) + "\n")
+    r = doctor(root)
+    assert f"kit version                        ok      {plugin_ver}" in r.stdout
+    assert r.returncode == 0

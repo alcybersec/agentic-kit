@@ -11,7 +11,10 @@ Run the script and report its output:
 bash "${CLAUDE_PLUGIN_ROOT}/bin/kit-doctor.sh"
 ```
 
-It exits 0 when every check passed or was skipped for a stated reason, and 1 otherwise. Do not
+It exits 0 when every check passed, was skipped for a stated reason, or produced a `note`, and 1
+otherwise. A **note** is a finding whose remedy is a judgement call rather than a one-line fix, so it
+never fails the run — a FAIL that cannot be cleared by following its own advice is one people learn to
+scroll past. Do not
 paraphrase the table — show it, then act on the failures.
 
 **Why this is not redundant with "the hooks are installed".** Every hook in this kit exits 0 when it
@@ -35,6 +38,8 @@ that it was.
 | `still register the guard in frontmatter` | the card is from a render before 2026-10-02 and points at a script nothing writes any more; a hook with a missing script exits non-2, which Claude Code reads as "continue" | re-render |
 | `the main thread was refused` | the guard is blocking the Orchestrator, which must write the plan, the register and the gate bundles | a payload with no `agent_type` must exit 0; report it, do not work around it |
 | `toolchain.format is '<x>' but '<x>' is not on PATH` | every edit silently formats nothing | install it, or correct `toolchain.format` and re-render |
+| `leftover guard script` | `.claude/hooks/ownership-guard.sh` is from a render before plugin 1.1.0; nothing invokes it, so it is a file that looks like enforcement and is not | delete it |
+| `kit version … note` | the profile pins a `kit_version` older than the installed plugin, so generated files may predate it | re-render; change `kit_version` in `.claude/kit.yaml` only if you did not mean to pin it |
 
 **What the script cannot check, and it says so in its own output.** Every guard here matches file
 paths or command strings, so an interpreter reaches past all of them, and `--safe-mode` disables
