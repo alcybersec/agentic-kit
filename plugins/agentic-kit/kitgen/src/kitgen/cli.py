@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
             print(p)
         # Advisories never change the exit code: §7.1b's codes are an interface, and
         # a roster worth a second look is not a reason to report "nothing written".
-        for a in advise(manifest, cfg):
+        for a in advise(manifest, cfg, project_root=args.root):
             print(f"advice: {a}", file=sys.stderr)
         return 1 if problems else 0
 
@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         for p in problems:
             print(p, file=sys.stderr)
         return 1
-    for a in advise(manifest, cfg):
+    for a in advise(manifest, cfg, project_root=args.out):
         print(f"advice: {a}", file=sys.stderr)
 
     # The profile is normally `.claude/kit.yaml` itself — §4.2 calls it the keystone —

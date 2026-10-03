@@ -59,8 +59,83 @@ def _covers(glob: str, path: str) -> bool:
 
 ROLE_CEILING = 8
 
+# Directories a source-coverage walk must not descend into. §9.1's list, plus the caches
+# and build outputs that would otherwise dominate the report.
+NOISE_DIRS = frozenset({
+    ".git", "node_modules", ".venv", "venv", "env", "data", "build", "dist", "target",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".next",
+    ".svelte-kit", "coverage", "htmlcov", "vendor", "site-packages", ".idea", ".vscode",
+})
 
-def advise(manifest: dict[str, str], cfg: KitConfig) -> list[str]:
+# What makes a directory a *source* directory rather than documentation or fixtures. Using
+# extensions keeps the signal high: without it the walk reports `docs/`, which the kit
+# leaves unowned on purpose, on every project.
+CODE_SUFFIXES = frozenset({
+    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".go", ".rs", ".rb", ".java",
+    ".kt", ".kts", ".php", ".cs", ".swift", ".scala", ".sql", ".sh", ".bash", ".css",
+    ".scss", ".vue", ".svelte", ".c", ".cc", ".cpp", ".h", ".hpp", ".ex", ".exs",
+})
+
+
+def unowned_source_dirs(cfg: KitConfig, project_root: Path) -> list[str]:
+    """Shallowest directories holding code that no role owns.
+
+    §9.1 asked for this and nothing implemented it, because it needs the disk. A role
+    agent found the gap unaided on the first real retrofit: `src/common/` (the event bus),
+    `src/contracts/`, `src/exchange/` and `src/sim/` had no owner, and **two of that
+    project's three floors depended on exactly that code** — so the floors were
+    unenforceable by anyone the ownership map named.
+
+    Unowned is legal and deliberate (§6.4: it is what keeps the guard usable), so this is
+    advice, never an error. It reports the SHALLOWEST unowned directory and stops there,
+    because listing every subdirectory of an unowned tree buries the finding.
+
+    It cannot read `.gitignore` — that would mean reimplementing gitignore or shelling out
+    to git, and this module does neither. A generated or vendored tree not in NOISE_DIRS
+    will be reported; the answer is to name it in a role's `owns` or ignore the line.
+    """
+    prefixes = [_glob_prefix(g) for r in cfg.roles for g in r.owns]
+    out: list[str] = []
+
+    def covered(rel: str) -> bool:
+        """`rel` itself, or an ancestor of it, is owned.
+
+        Deliberately NOT `_covers`, which answers "does this glob cover OR LIE INSIDE the
+        path" — right for deciding who owns `forge.ci`, wrong here: it made `src` look
+        owned because `src/modules/api/**` sits under it, so the first version of this walk
+        reported nothing at all on the project that motivated it.
+        """
+        return any(p and (p == rel or rel.startswith(p + "/")) for p in prefixes)
+
+    def contains_owned(rel: str) -> bool:
+        """Something below `rel` is owned, so `rel` is a container and not a finding."""
+        return any(p.startswith(rel + "/") for p in prefixes)
+
+    def walk(rel: str, depth: int) -> None:
+        if depth > 4:
+            return
+        d = project_root / rel if rel else project_root
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            return
+        if rel and covered(rel):
+            return
+        has_code = any(e.is_file() and e.suffix in CODE_SUFFIXES for e in entries)
+        if rel and has_code and not contains_owned(rel):
+            out.append(rel)
+            return                      # shallowest wins
+        for e in entries:
+            if not e.is_dir() or e.name in NOISE_DIRS or e.name.startswith("."):
+                continue
+            walk(f"{rel}/{e.name}" if rel else e.name, depth + 1)
+
+    walk("", 0)
+    return out
+
+
+def advise(manifest: dict[str, str], cfg: KitConfig,
+            project_root: Path | None = None) -> list[str]:
     """Non-fatal observations about a roster that is *valid* but probably wrong.
 
     Separate from verify() on purpose: §7.1b makes the CLI's exit codes an interface
@@ -106,6 +181,16 @@ def advise(manifest: dict[str, str], cfg: KitConfig) -> list[str]:
                     f"{cfg.spine['strategy']} §11, and the graph is expanded past "
                     f"{m0}. A role costs a boundary and a handoff whether or not it "
                     f"does work; leave it out until there is some.")
+    # The disk half, skipped without a root for the same reason verify() skips its own:
+    # with nothing to look at, "no role owns this" cannot be distinguished from "this
+    # directory does not exist".
+    if project_root is not None:
+        for d in unowned_source_dirs(cfg, project_root):
+            out.append(
+                f"{d!r} holds code and no role owns it. An unowned path is writable by "
+                f"every role, which is fine for a Makefile and a problem for shared code "
+                f"a floor depends on: nobody is accountable for it and no handoff names "
+                f"it. Give it to a role, or satisfy yourself that no floor rests on it.")
     return out
 
 

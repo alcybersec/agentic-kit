@@ -616,3 +616,77 @@ def test_an_advisory_never_changes_the_exit_code(load_fixture, tmp_path, capsys)
     err = capsys.readouterr().err
     assert rc == 0, err
     assert "advice: role 'worker' owns no path" in err
+
+
+# --- M2.4: code nobody owns ---------------------------------------------------
+
+def _tree(root, paths):
+    for rel in paths:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+
+
+def test_unowned_code_is_reported_shallowest_first(load_fixture, tmp_path):
+    """§9.1 asked for this and nothing implemented it, because it needs the disk. A role
+    agent found the gap unaided on the first real retrofit: the event bus, the contracts
+    package and the exchange adapters had no owner, and two of that project's three floors
+    depended on exactly that code — unenforceable by anyone the ownership map named."""
+    from kitgen.verify import unowned_source_dirs
+    cfg = load_fixture("python_monolith")      # owns src/ledger/{api,models}, alembic, tests/*
+    _tree(tmp_path, [
+        "src/ledger/api/routes.py",           # owned
+        "src/ledger/models/entry.py",         # owned
+        "src/common/bus.py",                  # NOT owned
+        "src/common/deep/nested/thing.py",    # under an unowned parent: not reported twice
+        "src/contracts/schema.py",            # NOT owned
+        "docs/notes.md",                      # no code: not a source directory
+        "node_modules/pkg/index.js",          # noise
+        ".venv/lib/x.py",                     # noise
+    ])
+    found = unowned_source_dirs(cfg, tmp_path)
+    assert "src/common" in found and "src/contracts" in found
+    assert "src/common/deep/nested" not in found, "the shallowest finding is the useful one"
+    assert "src/ledger/api" not in found and "src/ledger/models" not in found
+    assert "docs" not in found, "documentation is not source"
+    assert not any("node_modules" in f or ".venv" in f for f in found)
+
+
+def test_a_container_of_owned_trees_is_not_itself_a_finding(load_fixture, tmp_path):
+    """`src` is unowned in every fixture, and reporting it would bury the real findings
+    under the directory that holds them. The first version of this walk used `_covers`,
+    which answers "does this glob cover OR LIE INSIDE the path" — so `src` read as *owned*
+    and the whole check reported nothing on the project that motivated it."""
+    from kitgen.verify import unowned_source_dirs
+    cfg = load_fixture("python_monolith")
+    _tree(tmp_path, ["src/ledger/api/routes.py", "src/__init__.py"])
+    found = unowned_source_dirs(cfg, tmp_path)
+    assert "src" not in found
+    assert "src/ledger" not in found
+
+
+def test_an_owned_directory_is_never_reported(load_fixture, tmp_path):
+    from kitgen.verify import unowned_source_dirs
+    cfg = load_fixture("services_layout")
+    _tree(tmp_path, ["services/api/main.py", "services/ui/App.tsx",
+                     "services/safety/floor.py", "infra/compose.yaml"])
+    assert unowned_source_dirs(cfg, tmp_path) == []
+
+
+def test_the_advice_says_why_it_matters(load_fixture, tmp_path):
+    from kitgen.verify import advise
+    cfg = load_fixture("python_monolith")
+    _tree(tmp_path, ["src/common/bus.py"])
+    msgs = advise(render(cfg), cfg, project_root=tmp_path)
+    hit = [m for m in msgs if "src/common" in m]
+    assert hit, msgs
+    assert "no role owns it" in hit[0]
+    assert "a floor depends on" in hit[0], "the consequence, not just the fact"
+
+
+def test_the_disk_half_is_skipped_without_a_root(load_fixture):
+    """Same convention as verify(): with nothing to look at, "no role owns this" cannot be
+    told apart from "this directory does not exist"."""
+    from kitgen.verify import advise
+    cfg = load_fixture("python_monolith")
+    assert advise(render(cfg), cfg) == []

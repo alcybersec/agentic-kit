@@ -1049,12 +1049,28 @@ Runs against a rendered manifest, before anything is written:
 - CLAUDE.md agent table rows == `.claude/agents/*.md` files == `kit.yaml roles[].name`.
 - `roles[].owns` globs are pairwise non-overlapping. *(Implemented in `KitConfig.validate()`, not in
   `verify()`: a profile that overlaps never renders.)*
-- **M2.** On brownfield, every **detected source directory** is owned by exactly one role. Detected
-  source directories exclude anything matched by `.gitignore`, plus `node_modules/`, `data/`, `.venv/`,
-  build and cache directories: a tree can hold directories no role should own, and requiring coverage
-  of those would make the check unsatisfiable. **Not implemented in M1** (recorded 2026-10-02): it
-  needs detection, which means reading the project tree, which `verify()` does only for the presence of
-  `spine.inherited` paths. It belongs to the retrofit skill that does the detecting.
+- **Code no role owns is reported as advice** (implemented 2026-10-03, M2.4).
+  `verify.unowned_source_dirs(cfg, project_root)` walks the tree, skips `NOISE_DIRS` and dot
+  directories, and reports the **shallowest** directory holding a file with a code suffix that no
+  role's `owns` prefix covers. Advice rather than an error, because unowned is legal and deliberate
+  (§6.4: it is what keeps the guard usable) — but a shared tree a floor rests on is a different thing
+  from a Makefile, and nothing was saying so.
+
+  A role agent found this gap unaided on the first real retrofit: `src/common/` (the event bus),
+  `src/contracts/`, `src/exchange/` and `src/sim/` had no owner, and **two of that project's three
+  floors depended on exactly that code**. Run against the same repository the check finds all five the
+  agent found, plus `src/modules/notifications/` and four unowned test tiers including
+  `tests/security/`.
+
+  Two limits, both deliberate. It does **not** read `.gitignore`: that would mean reimplementing
+  gitignore or shelling out to git, and this module does neither, so a vendored tree outside
+  `NOISE_DIRS` will be reported. And a loose source file beside owned subtrees is not reported, because
+  the directory holding it is mostly owned and naming it would be more wrong than silent.
+
+  Ownership here is tested on glob *prefixes*, not with `_covers`. `_covers` answers "does this glob
+  cover **or lie inside** the path", which is right for deciding who owns `forge.ci` and wrong here: it
+  made `src` read as owned because `src/modules/api/**` sits beneath it, and the first version of the
+  walk reported nothing at all on the project that motivated it.
 - Each role's `handoff_extra` lines appear in **that role's own agent card**. *(Corrected
   2026-10-02: this said "`/handoff`'s role-specific lines == the union of `roles[].handoff_extra`",
   describing a check that cannot exist — `/handoff` is a static skill shipped with the plugin and
