@@ -991,6 +991,9 @@ Then ground the user in one short message: current milestone, next task ID, any 
 {% endif %}
 
 - `git push` for code; `{{ forge.cli }}` for issues, reviews, CI.
+{% if ci_elsewhere %}
+- **Tracker and CI are on different forges here.** Issues and {% if forge.kind == 'gitlab' %}merge requests{% else %}pull requests{% endif %} live on **{{ forge.kind }}**, so use `{{ forge.cli }}` for those and do not propose moving them. CI runs from **`{{ forge.ci }}`**, which is {% if forge.kind == 'gitlab' %}GitHub Actions{% else %}GitLab CI{% endif %} — that is deliberate, so read pipeline results there with its own CLI rather than treating it as a mistake.
+{% endif %}
 {% if forge.exclusive %}
 - **Only `{{ forge.cli }}`.** Do not propose {% if forge.kind == 'gitlab' %}GitHub Actions, pull requests, or `gh`{% else %}GitLab CI, merge requests, or `glab`{% endif %} for this project. The `pre-bash-guard` hook enforces this.
 {% endif %}

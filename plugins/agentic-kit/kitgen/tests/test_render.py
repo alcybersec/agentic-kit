@@ -174,37 +174,37 @@ def test_no_template_placeholder_survives_rendering(load_fixture):
                 assert "{{" not in body and "{%" not in body, (name, path)
 
 
-def test_render_module_contract():
-    """SINGLETONS and GENERATE_ONCE are referenced by the CLI and by M2's upgrade
-    skill, so pin them here. The plan's Task 4 block once declared GENERATE_ONCE while
-    the committed module lacked it, which nothing caught."""
-    from kitgen.render import GENERATE_ONCE, LIVING, SINGLETONS, is_preserved
-    assert len(SINGLETONS) == 10, sorted(SINGLETONS)
-    assert GENERATE_ONCE == {
-        "docs/plan/README.md",
-        "docs/adr/0001-adopt-agentic-kit.md",
-    }
-    assert GENERATE_ONCE <= set(SINGLETONS.values())
-    # §7.1a's living set, in full. A document missing from here is one `--force`
-    # silently empties, so the omission has to be a visible edit to this list.
-    assert LIVING == {
-        "docs/strategy.md",
-        "docs/design.md",
-        "docs/decisions.md",
-        "docs/CONTRACTS.md",
-        "docs/risk-register.md",
-    }
-    assert LIVING <= set(SINGLETONS.values())
-    assert not (LIVING & GENERATE_ONCE)
-    assert all(is_preserved(p) for p in LIVING | GENERATE_ONCE)
-    assert is_preserved(".claude/agent-memory/backend/MEMORY.md")
-    assert is_preserved(".claude/agent-memory/a-role-not-in-this-profile/MEMORY.md")
-    # Scaffolding: these MUST be re-rendered, or a profile change never lands.
-    for p in ("CLAUDE.md", ".claude/settings.json", ".claude/agents/orchestrator.md",
-              ".claude/agents/backend.md",
-              ".claude/kit.yaml", ".claude/kit.lock.json"):
-        assert not is_preserved(p), p
+def test_render_module_contract(load_fixture):
+    """The module's shape is referenced by the CLI and by M2's upgrade skill, so pin it.
+    The plan's Task 4 block once declared GENERATE_ONCE while the committed module lacked
+    it, which nothing caught."""
+    from kitgen.render import (ADR_0001, FIXED_SINGLETONS, GENERATE_ONCE_KEYS,
+                               LIVING_KEYS, SPINE_SINGLETONS, is_preserved,
+                               preserved_paths)
+    assert len(FIXED_SINGLETONS) == 3, sorted(FIXED_SINGLETONS)
+    assert set(FIXED_SINGLETONS.values()) == {
+        "CLAUDE.md", ".claude/agents/orchestrator.md", ".claude/settings.json"}, (
+        "these three paths are fixed by Claude Code, not by the profile")
+    assert set(SPINE_SINGLETONS.values()) == {
+        "plan", "strategy", "design", "decisions", "risks", "contracts"}, (
+        "every spine document must take its path from the profile")
+    assert GENERATE_ONCE_KEYS == {"plan"}
+    assert LIVING_KEYS == {"strategy", "design", "decisions", "contracts", "risks"}
+    assert not (GENERATE_ONCE_KEYS & LIVING_KEYS)
 
+    cfg = load_fixture("python_monolith")
+    preserved = preserved_paths(cfg)
+    # §7.1a's set, resolved against THIS profile rather than listed literally — a literal
+    # list would protect docs/strategy.md in a project that asked for the operating model
+    # to live elsewhere, and silently overwrite the file that holds the work.
+    assert preserved == {cfg.spine[k] for k in GENERATE_ONCE_KEYS | LIVING_KEYS} | {ADR_0001}
+    assert all(is_preserved(p, cfg) for p in preserved)
+    assert is_preserved(".claude/agent-memory/backend/MEMORY.md", cfg)
+    assert is_preserved(".claude/agent-memory/not-in-this-profile/MEMORY.md", cfg)
+    # Scaffolding: these MUST be re-rendered, or a profile change never lands.
+    for path in ("CLAUDE.md", ".claude/settings.json", ".claude/agents/orchestrator.md",
+                 ".claude/agents/backend.md", ".claude/kit.yaml", ".claude/kit.lock.json"):
+        assert not is_preserved(path, cfg), path
 
 def test_the_claude_md_agent_table_header_describes_its_own_cells(load_fixture):
     """The header said `| Agent | Owns |` while the second cell held the role's
@@ -251,3 +251,80 @@ def test_claude_md_gives_a_working_re_render_command(load_fixture):
     assert "--profile .claude/kit.yaml" in body
     assert "--dry-run" in body, "the dry run is what makes --force safe to recommend"
     assert "does** replace this file" in body, "CLAUDE.md is not preserved; say so"
+
+
+def test_the_spine_paths_come_from_the_profile(load_variant):
+    """Found by retrofitting a real repository: `docs/strategy.md` is the wrong name where
+    "strategy" already means trading strategy, and until 2026-10-03 renaming it rendered
+    the default anyway and then failed verification — the schema offered a choice the
+    renderer ignored."""
+    cfg = load_variant("python_monolith", spine={
+        "plan": "docs/kit/plan.md",
+        "strategy": "docs/kit/operating-model.md",
+        "design": "docs/kit/design.md",
+        "decisions": "docs/kit/decisions.md",
+        "risks": "docs/kit/risks.md",
+        "contracts": "docs/kit/CONTRACTS.md",
+        "inherited": [],
+    }, load_order=[{"path": "docs/kit/plan.md", "mode": "full"},
+                   {"path": "docs/kit/operating-model.md", "mode": "sections",
+                    "sections": ["2", "11"]}])
+    man = render(cfg)
+    for key, path in cfg.spine.items():
+        if key == "inherited":
+            continue
+        assert path in man, (key, path)
+    for gone in ("docs/strategy.md", "docs/design.md", "docs/decisions.md",
+                 "docs/risk-register.md", "docs/CONTRACTS.md", "docs/plan/README.md"):
+        assert gone not in man, f"{gone} is the default, not what this profile asked for"
+    from kitgen.verify import verify
+    assert verify(man, cfg) == [], "a renamed spine must still verify"
+
+
+def test_renamed_living_documents_are_still_preserved(load_variant):
+    """The point of resolving the set from the profile: `--force` must protect the file
+    that actually holds the work, not the one the default would have been."""
+    from kitgen.render import is_preserved
+    cfg = load_variant("python_monolith", spine={
+        "plan": "docs/kit/plan.md", "strategy": "docs/kit/operating-model.md",
+        "design": "docs/kit/design.md", "decisions": "docs/kit/decisions.md",
+        "risks": "docs/kit/risks.md", "contracts": "docs/kit/CONTRACTS.md",
+        "inherited": [],
+    })
+    assert is_preserved("docs/kit/operating-model.md", cfg)
+    assert not is_preserved("docs/strategy.md", cfg), (
+        "the default path holds nothing in this project; protecting it would be a lie")
+
+
+def test_a_renamed_spine_with_a_stale_load_order_is_reported(load_variant):
+    """Renaming a spine document means updating `load_order` too, and verify is what says
+    so — it was the only thing connecting the two even when the paths were hardcoded."""
+    from kitgen.verify import verify
+    cfg = load_variant("python_monolith", spine={
+        "plan": "docs/kit/plan.md", "strategy": "docs/kit/operating-model.md",
+        "design": "docs/kit/design.md", "decisions": "docs/kit/decisions.md",
+        "risks": "docs/kit/risks.md", "contracts": "docs/kit/CONTRACTS.md",
+        "inherited": [],
+    })   # load_order left at the fixture's default paths
+    problems = verify(render(cfg), cfg)
+    assert any("load_order path 'docs/plan/README.md'" in p for p in problems), problems
+
+
+def test_claude_md_describes_a_split_tracker_and_ci(load_variant):
+    """It used to say "do not propose GitHub Actions" while `forge.ci` pointed straight at
+    GitHub Actions — a contradiction the kit rendered into the file an agent reads first."""
+    cfg = load_variant("python_monolith", forge={
+        "kind": "gitlab", "cli": "glab", "remote": "git@h:o/r.git",
+        "ci": ".github/workflows", "exclusive": False, "mirror": "github"})
+    body = render(cfg)["CLAUDE.md"]
+    assert "Tracker and CI are on different forges here" in body
+    assert "`.github/workflows`" in body
+    assert "that is deliberate" in body
+    assert "Do not propose GitHub Actions" not in body, "the contradiction is the bug"
+
+
+def test_claude_md_keeps_the_single_forge_rule_when_they_match(load_fixture):
+    cfg = load_fixture("services_layout")
+    body = render(cfg)["CLAUDE.md"]
+    assert "Only `glab`" in body and "Do not propose GitHub Actions" in body
+    assert "different forges" not in body

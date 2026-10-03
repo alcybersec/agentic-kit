@@ -240,6 +240,20 @@ critical: []                       # optional: paths only the veto role may chan
 - Role entries MUST carry no unknown keys. A misspelled `handoff_extra` would otherwise load as an
   empty list, and §9.1's per-role handoff check passes vacuously on an empty list — so the role card
   would render with no handoff lines and nothing downstream would notice.
+- **`spine.*` paths are honoured by the renderer** (fixed 2026-10-03, M2.6). They were hardcoded in
+  `SINGLETONS` while this section presented them as configuration, so pointing `spine.strategy`
+  elsewhere rendered `docs/strategy.md` anyway and then failed verification. `SPINE_SINGLETONS` maps
+  each template to a spine *key*, and `render.preserved_paths(cfg)` resolves §7.1a's living and
+  generate-once sets from the profile too — a literal set would have protected `docs/strategy.md` in a
+  project that asked for the operating model to live elsewhere, and overwritten the file holding the
+  work. Found by retrofitting a repository where "strategy" already means trading strategy. Renaming a
+  spine path means updating `load_order` as well, and `verify()` says so.
+- **`forge.exclusive` may not be set when `forge.ci` belongs to the other forge** (added 2026-10-03,
+  M2.7). A real repository keeps its tracker on a self-hosted GitLab and runs CI from
+  `.github/workflows`, deliberately. Exclusivity would block `gh`, the only way to read that pipeline,
+  so the configuration would forbid the one command the project needs — and the rendered CLAUDE.md told
+  the agent not to propose the CI system it actually runs on. `model.ci_forge()` reads the convention,
+  and CLAUDE.md now states the split as a fact about the project rather than contradicting it.
 - `roles[].model` is **optional** and defaults to `inherit`. Accepted: `inherit`, an alias
   (`opus`, `sonnet`, `haiku`, `fable`), or a full model ID beginning `claude-`. Anything else is
   rejected at the profile, because Claude Code does not report an unusable value until the subagent is

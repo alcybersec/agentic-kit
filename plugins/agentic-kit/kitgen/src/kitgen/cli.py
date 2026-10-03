@@ -268,8 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         # render.is_preserved. What remains is scaffolding, and it is listed
         # because "overwrite the generated files" is only reassuring when the
         # caller can see which files those turned out to be.
-        frozen = sorted(p for p in clashes if is_preserved(p))
-        overwrite = sorted(p for p in clashes if not is_preserved(p))
+        frozen = sorted(p for p in clashes if is_preserved(p, cfg))
+        overwrite = sorted(p for p in clashes if not is_preserved(p, cfg))
         clashes = []
 
     if args.dry_run:

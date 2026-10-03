@@ -57,10 +57,11 @@ def test_the_sync_check_covers_every_template_on_disk():
 def test_the_sync_check_covers_every_template_render_uses():
     """And the other direction: a template in `SINGLETONS` or rendered per role
     that nobody checks."""
-    from kitgen.render import SINGLETONS
+    from kitgen.render import FIXED_SINGLETONS, SPINE_SINGLETONS
     cps = _load("check_plan_sync")
     checked = {name for _, _, _, name in cps.EXPECTED}
-    used = set(SINGLETONS) | {"role.md.j2", "MEMORY.md.j2"}
+    used = (set(FIXED_SINGLETONS) | set(SPINE_SINGLETONS)
+            | {"adr-0001.md.j2", "role.md.j2", "MEMORY.md.j2"})
     assert used <= checked, sorted(used - checked)
 
 

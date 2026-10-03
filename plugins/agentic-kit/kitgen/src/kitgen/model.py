@@ -8,6 +8,21 @@ from typing import Any
 
 CLI_FOR_FORGE = {"gitlab": "glab", "github": "gh", "none": "none"}
 
+# Which forge a CI configuration path belongs to, by convention. Used to detect a project
+# whose tracker and CI live on DIFFERENT forges — which the kit assumed could not happen
+# until a real retrofit found one: `origin` on a self-hosted GitLab, CI in
+# `.github/workflows`, deliberately. That split is legitimate and the kit has to describe
+# it accurately instead of contradicting itself.
+def ci_forge(ci: str | None) -> str | None:
+    if not ci:
+        return None
+    if ci.startswith(".github/"):
+        return "github"
+    if ci.startswith(".gitlab-ci") or ci.endswith(".gitlab-ci.yml"):
+        return "gitlab"
+    return None
+
+
 # Subagent `model` frontmatter: an alias, a full model ID, or `inherit`.
 MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
 
@@ -336,6 +351,20 @@ class KitConfig:
         # protecting different sets of files while the profile named one. Rejected
         # rather than rewritten, for the same reason as `owns` above: a silently
         # corrected pattern teaches the author nothing.
+        # Tracker and CI may live on different forges, but then the other forge's CLI
+        # cannot be blocked: reading a pipeline result is the one thing that CLI is for.
+        other_ci = ci_forge(self.forge.ci)
+        if (self.forge.exclusive and other_ci is not None
+                and other_ci != self.forge.kind
+                and self.forge.kind in CLI_FOR_FORGE and self.forge.kind != "none"):
+            raise ConfigError(
+                f"forge.exclusive is true with kind {self.forge.kind!r}, but forge.ci "
+                f"{self.forge.ci!r} is {other_ci}'s. Exclusivity blocks "
+                f"{CLI_FOR_FORGE[other_ci]!r}, which is the only way to read that "
+                f"pipeline — so the configuration forbids the one command the project "
+                f"needs. Set exclusive: false when the tracker and CI are on different "
+                f"forges, and record the mirror in forge.mirror.")
+
         for secret in self.secrets:
             if not isinstance(secret, str) or not secret.strip():
                 raise ConfigError(

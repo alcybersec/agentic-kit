@@ -648,3 +648,42 @@ def test_default_tools_let_a_role_track_multi_step_work():
     assert "TodoWrite" in DEFAULT_TOOLS
     assert "Agent" not in DEFAULT_TOOLS, (
         "a role must not dispatch: spawn depth is 1 and only the Orchestrator dispatches")
+
+
+# --- tracker and CI on different forges (M2.7) --------------------------------
+
+@pytest.mark.parametrize("ci,belongs", [
+    (".github/workflows", "github"), (".github/workflows/ci.yml", "github"),
+    (".gitlab-ci.yml", "gitlab"), ("./.gitlab-ci.yml", "gitlab"),
+    ("Jenkinsfile", None), ("", None), (None, None),
+])
+def test_ci_forge_reads_the_convention(ci, belongs):
+    from kitgen.model import ci_forge
+    assert ci_forge(ci) == belongs
+
+
+def test_exclusive_with_the_other_forges_ci_is_rejected():
+    """Found by retrofitting a real repository: `origin` on a self-hosted GitLab, CI in
+    `.github/workflows`, deliberately. Exclusivity would block `gh`, which is the only way
+    to read that pipeline — the configuration would forbid the one command the project
+    needs, and the rendered CLAUDE.md would tell the agent not to propose the CI system it
+    actually runs on."""
+    bad = {**MINIMAL, "forge": {**MINIMAL["forge"], "kind": "gitlab", "cli": "glab",
+                                "ci": ".github/workflows", "exclusive": True}}
+    with pytest.raises(ConfigError, match="is github's"):
+        KitConfig.from_dict(bad)
+
+
+def test_a_split_tracker_and_ci_is_fine_when_not_exclusive():
+    """The split itself is legitimate; only blocking the CLI you need is not."""
+    cfg = KitConfig.from_dict({**MINIMAL, "forge": {
+        **MINIMAL["forge"], "kind": "gitlab", "cli": "glab",
+        "ci": ".github/workflows", "exclusive": False, "mirror": "github"}})
+    assert cfg.forge.ci == ".github/workflows"
+
+
+def test_exclusive_with_its_own_forges_ci_is_fine():
+    cfg = KitConfig.from_dict({**MINIMAL, "forge": {
+        **MINIMAL["forge"], "kind": "gitlab", "cli": "glab",
+        "ci": ".gitlab-ci.yml", "exclusive": True}})
+    assert cfg.forge.exclusive is True

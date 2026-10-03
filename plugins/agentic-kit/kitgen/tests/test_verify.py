@@ -231,14 +231,29 @@ def test_spine_path_neither_rendered_nor_on_disk_is_reported(load_fixture, tmp_p
     assert any("docs/PRD.md" in p for p in problems)
 
 
-def test_spine_path_the_renderer_does_not_produce_is_reported(load_fixture, tmp_path):
-    """render() hardcodes docs/design.md; a profile pointing elsewhere is only
-    caught here."""
+def test_a_relocated_spine_document_is_rendered_there_and_verifies(load_fixture, tmp_path):
+    """This test used to assert the opposite, because `render()` hardcoded the spine paths
+    while §5 offered them as configuration — so pointing `spine.design` elsewhere produced
+    `docs/design.md` and a verification error. Since 2026-10-03 the renderer emits at the
+    configured path, and the check's remaining job is `spine.inherited`, which is never
+    rendered by anyone."""
     def edit(l):
         l["spine"]["design"] = "docs/elsewhere.md"
+        l["load_order"] = [{"path": l["spine"]["plan"], "mode": "full"}]
+    cfg = _variant(load_fixture("python_monolith"), edit)
+    man = render(cfg)
+    assert "docs/elsewhere.md" in man and "docs/design.md" not in man
+    assert verify(man, cfg, project_root=tmp_path) == []
+
+
+def test_an_inherited_path_absent_from_disk_is_still_reported(load_fixture, tmp_path):
+    """What that check is actually for: a document the profile calls authoritative and
+    that nothing renders, so only the disk can confirm it."""
+    def edit(l):
+        l["spine"]["inherited"] = ["docs/PRD.md"]
     cfg = _variant(load_fixture("python_monolith"), edit)
     problems = verify(render(cfg), cfg, project_root=tmp_path)
-    assert any("spine.design" in p and "docs/elsewhere.md" in p for p in problems)
+    assert any("spine.inherited" in p and "docs/PRD.md" in p for p in problems), problems
 
 
 def test_without_a_project_root_the_disk_checks_are_skipped(load_fixture):
