@@ -280,3 +280,42 @@ def test_the_doctor_distinguishes_a_wired_shim_from_an_unwired_one(tmp_path, loa
     r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True, env=env)
     assert "shim at ~/.claude/kit-usage-probe.sh exists" in r.stdout
     assert "not wired" not in r.stdout
+
+
+def test_an_untrusted_workspace_is_a_note_naming_what_it_costs(tmp_path, load_fixture):
+    """Untrusted is not broken: every deny rule and every hook still fires. What it costs
+    is `permissions.allow`, and through it the ability to continue unattended after a
+    usage-limit reset — the continued turn asks for permissions as usual and stalls on the
+    first command. A fresh install is untrusted by definition, so failing on it would
+    teach people to ignore failures."""
+    root = install(tmp_path, load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root), "HOME": str(home)}
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True, env=env)
+    assert "workspace trusted" in r.stdout and "not trusted yet" in r.stdout
+    assert "stalls on the first command" in r.stdout
+    assert "FAIL" not in r.stdout, r.stdout
+    assert r.returncode == 0
+
+    (home / ".claude.json").write_text(json.dumps(
+        {"projects": {str(root): {"hasTrustDialogAccepted": True}}}))
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True, env=env)
+    assert "permissions.allow is in effect" in r.stdout
+    assert "not trusted yet" not in r.stdout
+
+
+def test_auto_continue_turned_off_is_reported(tmp_path, load_fixture):
+    """The kit leaves the 5-hour window unguarded precisely because Claude Code continues
+    an interrupted task itself. Turning that off removes the thing the default relies on,
+    silently."""
+    root = install(tmp_path, load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude/settings.json").write_text('{"autoContinueAtUsageLimit": false}')
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root),
+                            "HOME": str(home)})
+    assert "auto-continue at usage limit" in r.stdout
+    assert "turned off in" in r.stdout
+    assert r.returncode == 1, "this one IS a failure: it removes an assumed mechanism"

@@ -128,25 +128,44 @@ role outright**.
 | `/kit-doctor` | prove the guards are firing |
 | `/kit-init` | install the kit into a project (declines where one exists) |
 
-## Pausing before a subscription limit runs out
+## Usage limits: what Claude Code already does, and what the kit adds
 
-The kit can stop dispatching work when the account's rate-limit window is nearly spent, and resume
-itself when the window resets. Two thresholds, in the profile, defaulting to:
+**Read this before configuring anything.** When a usage limit stops Claude mid-task, Claude Code waits
+in the open session and continues the task itself after the reset — on by default for an interactive
+claude.ai session, v2.1.234 or later. That is genuinely unattended and the kit should not, and does not,
+try to replace it.
+
+It has one gap, and the kit covers exactly that gap:
+
+| Window | Who handles it | Why |
+|---|---|---|
+| **5-hour** | **Claude Code.** The kit ships `five_hour_pct: 0` — never pause. | Hitting the limit arms the wait-and-continue. Pausing *before* the limit means it never arms, so a preemptive stop here buys clean task boundaries and **costs you the automatic resume**. |
+| **7-day** | **The kit**, at 95%. | Claude Code does not start that wait on its own for a reset more than 24 hours away, and a weekly limit can reset days out. Being interrupted mid-task there leaves a role's work half-done with nothing to resume it. |
 
 ```yaml
 usage:
-  five_hour_pct: 90      # pause at 90% of the 5-hour window
-  seven_day_pct: 95      # and 95% of the 7-day one
+  five_hour_pct: 0       # 0 = never pause; let Claude Code's own wait handle it
+  seven_day_pct: 95      # pause here, because nothing auto-resumes a multi-day wait
   stale_after_s: 900     # ignore a usage reading older than this
 ```
 
-**It needs wiring, because of where the data lives.** `rate_limits` reaches user code in exactly one
-payload — the status line's — and no hook event carries it. So the status line is the sensor.
+Set `five_hour_pct` to 90 if you would rather have clean task boundaries than an unattended resume.
+That is a real preference, not a mistake.
 
-Create this shim **once**. It resolves the installed plugin at run time, so it keeps working across
-upgrades — wiring the versioned cache path directly does not, and when it breaks the sensor stops
-writing, the reading goes stale, and the gate **fails open**: the pause disarms silently, which is the
-one failure mode this kit exists to avoid.
+### What the kit's pause does
+
+The `usage-gate` hook refuses **new dispatches only**, so a task already running can ride into the limit
+and be continued automatically, while no *new* task is started that cannot be finished. The
+Orchestrator keeps the file tools, because the thing it must do next is record where the work stopped.
+Its message carries the protocol: write the plan entry first (that is the durable half), then — for a
+reset beyond 24 hours — tell you that nothing will resume it by itself, and that `/rate-limit-options`
+can arm a wait that does count down past 24 hours while the session stays open.
+
+### Wiring, because of where the data lives
+
+`rate_limits` reaches user code in exactly one payload — the status line's — and no hook event carries
+it. So the status line is the sensor. Create this shim **once**; it resolves the installed plugin at run
+time, so it survives upgrades, which a path into the versioned cache does not:
 
 ```bash
 cat > ~/.claude/kit-usage-probe.sh <<'SHIM'
@@ -166,33 +185,33 @@ SHIM
 chmod +x ~/.claude/kit-usage-probe.sh
 ```
 
-Newest by **mtime**, not by version string: install time is the right meaning of "the one you are
-using", and it avoids sorting `1.10.0` against `1.9.0`. Then add one line to your status line:
+Newest by **mtime**, not version string: install time is the right meaning of "the one you are using",
+and it avoids sorting `1.10.0` against `1.9.0`. Then one line in your status line:
 
 ```bash
 # after you have read stdin into "$input":
 printf '%s' "$input" | bash "$HOME/.claude/kit-usage-probe.sh"
 ```
 
-The probe prints nothing, so it cannot disturb your layout; pass `--print` if you want a `5h 23% 7d 41%`
-segment. It writes `~/.claude/kit-usage.json`, per account rather than per project, since a rate limit
-is not a property of a repository. `/kit-doctor` reports whether the pause is **armed** and how old the
-last reading is.
+The probe prints nothing, so it cannot disturb your layout; `--print` gives a `5h 23% 7d 41%` segment.
 
 **Nothing to configure for an API key.** `rate_limits` appears only for claude.ai Pro and Max, so its
 absence *is* the API-key case: no snapshot, no pause, no detection needed.
 
-**What happens at the threshold.** The `usage-gate` hook refuses new dispatches — and only dispatches,
-so the Orchestrator can still write down where the work stopped. Its message carries the protocol: park
-the in-flight task in the plan first (durable), then schedule a one-shot `/next-task` for just after the
-window's reset, then say so in one line. `/next-task` checks before dispatching, so the ordinary case is
-a clean stop rather than a refusal.
+### Two prerequisites for unattended operation, both checked by `/kit-doctor`
 
-**Two honest limits.** A scheduled task lives only in the session that created it, so the plan entry is
-what carries the work across a session that ends — and `SessionStart` reports the in-flight task, so the
-next session picks it up. And a reading older than `stale_after_s` is **ignored**: the status line stops
-being invoked when a session is not rendering, and pausing on an hour-old number would stop work that
-could have continued. This reduces overrun; it does not guarantee against it.
+- **Accept the trust dialog in the project.** An untrusted workspace has every `permissions.allow` entry
+  ignored, so a continued turn after a reset stalls on the first command it needs. The deny rules and
+  all the hooks work either way — what trust buys is the ability to keep going without you.
+- **Leave `autoContinueAtUsageLimit` alone.** It is on by default; turning it off removes the mechanism
+  the 5-hour window relies on, and the kit deliberately leaves that window unguarded.
+
+`/kit-doctor` reports whether the pause is **armed**, how old the last reading is, whether the workspace
+is trusted, and whether auto-continue has been turned off.
+
+**One honest limit.** A reading older than `stale_after_s` is **ignored**: the status line is not invoked
+when a session is not rendering, and pausing on an hour-old number would stop work that could have
+continued. This reduces overrun; it does not guarantee against it.
 
 ## What the guards do, and what they do not
 

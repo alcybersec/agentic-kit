@@ -127,43 +127,93 @@ def test_under_both_thresholds_is_allowed(tmp_path, load_fixture):
     assert gate(root, snap).returncode == 0
 
 
-@pytest.mark.parametrize("five,seven,window", [
-    (90, 10, "5-hour"), (95, 10, "5-hour"), (10, 95, "7-day"), (10, 99, "7-day"),
-])
-def test_at_or_over_a_threshold_pauses(tmp_path, load_fixture, five, seven, window):
-    """At the threshold, not past it: 90 means 90."""
+@pytest.mark.parametrize("seven", [95, 96, 100])
+def test_at_or_over_the_weekly_threshold_pauses(tmp_path, load_fixture, seven):
+    """At the threshold, not past it: 95 means 95."""
     root = project(tmp_path, load_fixture)
-    snap = snapshot(tmp_path / "u.json", five=five, seven=seven)
+    snap = snapshot(tmp_path / "u.json", five=10, seven=seven)
     r = gate(root, snap)
-    assert r.returncode == 2, (five, seven, r.stdout, r.stderr)
-    assert window in r.stderr
-    assert "Paused" in r.stderr
+    assert r.returncode == 2, (seven, r.stdout, r.stderr)
+    assert "7-day" in r.stderr and "Paused" in r.stderr
 
 
-def test_the_pause_names_both_halves_of_the_protocol(tmp_path, load_fixture):
-    """Durable first, scheduled second. A scheduled task lives only in its session, so the
-    plan entry is what carries the work across a session that ends."""
+@pytest.mark.parametrize("five", [90, 99, 100])
+def test_the_five_hour_window_is_not_gated_by_default(tmp_path, load_fixture, five):
+    """It ships at 0, meaning never pause — and that is the whole correction of
+    2026-10-03. When a usage limit stops Claude mid-task, Claude Code waits in the open
+    session and continues the task itself after the reset, on by default for an
+    interactive claude.ai session. That is genuinely unattended, and a preemptive pause
+    cannot improve on it: the wait arms on HITTING the limit, so stopping at 90% means it
+    never arms and nothing ever resumes. Pausing here buys clean task boundaries and
+    costs the automatic resume."""
+    root = project(tmp_path, load_fixture)
+    snap = snapshot(tmp_path / "u.json", five=five)
+    assert gate(root, snap).returncode == 0, "the 5-hour window must ride into the limit"
+
+
+def test_the_five_hour_window_can_still_be_enabled(tmp_path, load_fixture):
+    """Off by default is a default, not a prohibition: clean task boundaries are a
+    legitimate thing to prefer over an unattended resume."""
+    root = project(tmp_path, load_fixture, five_hour_pct=90)
+    assert gate(root, snapshot(tmp_path / "u.json", five=91)).returncode == 2
+
+
+def test_zero_disables_a_window(tmp_path, load_fixture):
+    root = project(tmp_path, load_fixture, seven_day_pct=0)
+    assert gate(root, snapshot(tmp_path / "u.json", seven=100)).returncode == 0
+
+
+def test_the_pause_records_the_durable_half_first(tmp_path, load_fixture):
     root = project(tmp_path, load_fixture)
     r = gate(root, snapshot(tmp_path / "u.json", five=10, seven=97))
     assert "Record the state in the plan" in r.stderr
-    assert "ONE-SHOT scheduled task" in r.stderr
+    assert "This is the durable half — do it first" in r.stderr
     assert "/next-task" in r.stderr
-    assert "if the session ends the plan entry above is what carries the work" in r.stderr
     assert "Do not retry this dispatch" in r.stderr
     assert "do not start the task yourself" in r.stderr
+
+
+def test_a_reset_beyond_a_day_says_nothing_will_resume_it(tmp_path, load_fixture):
+    """Claude Code does not start its own wait for a reset more than 24 hours away, and a
+    weekly limit can reset days out. Saying "it will resume" there would be false."""
+    root = project(tmp_path, load_fixture)
+    snap = tmp_path / "u.json"
+    snap.write_text(json.dumps({
+        "read_at": int(time.time()),
+        "seven_day": {"used_percentage": 97,
+                      "resets_at": int(time.time()) + 3 * 86400}}))
+    r = gate(root, snap)
+    assert "does NOT start its own wait-and-continue" in r.stderr
+    assert "/rate-limit-options" in r.stderr
+    assert "nothing will resume this by itself" in r.stderr
+
+
+def test_a_reset_within_a_day_points_at_the_native_wait(tmp_path, load_fixture):
+    """Under 24 hours, Claude Code would have continued the task itself had the limit
+    actually stopped it — so the message says that stopping short is what prevented it."""
+    root = project(tmp_path, load_fixture, seven_day_pct=90)
+    snap = tmp_path / "u.json"
+    snap.write_text(json.dumps({
+        "read_at": int(time.time()),
+        "seven_day": {"used_percentage": 97,
+                      "resets_at": int(time.time()) + 3600}}))
+    r = gate(root, snap)
+    assert "would have waited and picked the task up by itself" in r.stderr
+    assert "five_hour_pct ships at 0" in r.stderr
 
 
 def test_the_pause_names_the_reset_time(tmp_path, load_fixture):
     """"Resume later" is not actionable; a wall-clock time is."""
     root = project(tmp_path, load_fixture)
-    r = gate(root, snapshot(tmp_path / "u.json", five=99))
-    assert "Schedule the resume for just after" in r.stderr
-    assert ":" in r.stderr.split("just after")[1][:24], "a time, not a placeholder"
+    r = gate(root, snapshot(tmp_path / "u.json", seven=99))
+    assert "come back after" in r.stderr
+    assert ":" in r.stderr.split("come back after")[1][:24], "a time, not a placeholder"
 
 
 def test_the_worst_window_is_the_one_reported(tmp_path, load_fixture):
     root = project(tmp_path, load_fixture)
-    r = gate(root, snapshot(tmp_path / "u.json", five=91, seven=99))
+    root2 = project(tmp_path / "b", load_fixture, five_hour_pct=90)
+    r = gate(root2, snapshot(tmp_path / "u.json", five=91, seven=99))
     assert "7-day" in r.stderr and "99%" in r.stderr
 
 
@@ -173,13 +223,13 @@ def test_a_stale_reading_fails_open(tmp_path, load_fixture):
     act on one — and the docs say plainly that this reduces overrun rather than
     preventing it."""
     root = project(tmp_path, load_fixture)
-    snap = snapshot(tmp_path / "u.json", five=99, age_s=5000)
+    snap = snapshot(tmp_path / "u.json", five=99, seven=99, age_s=5000)
     assert gate(root, snap).returncode == 0
 
 
 def test_the_staleness_window_comes_from_the_profile(tmp_path, load_fixture):
     root = project(tmp_path, load_fixture, stale_after_s=10_000)
-    snap = snapshot(tmp_path / "u.json", five=99, age_s=5000)
+    snap = snapshot(tmp_path / "u.json", five=99, seven=99, age_s=5000)
     assert gate(root, snap).returncode == 2, "5000s is fresh when stale_after_s is 10000"
 
 

@@ -161,6 +161,9 @@ def test_next_task_checks_the_usage_pause_before_dispatching():
     text = " ".join((SKILLS / "next-task/SKILL.md").read_text().split())
     assert "Before dispatching, check the usage pause" in text
     assert "kit-usage.json" in text
-    assert "ONE-SHOT task" in text and "resets_at" in text
+    assert "Do **not** invent a resume mechanism" in text, (
+        "the first version told the agent to schedule its own resume, which prevented "
+        "the native wait-and-continue from ever arming")
+    assert "/rate-limit-options" in text
     assert "No such file means there is nothing to check" in text, (
         "an API key and an unwired probe must both read as 'nothing to do'")

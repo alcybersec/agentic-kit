@@ -8,12 +8,16 @@ Read `.claude/kit.lock.json` in the project root (`$CLAUDE_PROJECT_DIR`, else th
 Take every path below from the lock rather than assuming one. Only the Orchestrator runs this.
 
 **Before dispatching, check the usage pause.** If `~/.claude/kit-usage.json` exists, is newer than
-`usage.stale_after_s` seconds, and shows a window at or over its threshold in `usage`, do not dispatch.
-Park instead: record the in-flight task in `spine.plan` under `## Active` with what is done and what
-remains, schedule a ONE-SHOT task for just after that window's `resets_at` whose prompt is
-`/next-task`, and say in one line that you paused, which window, and when you resume. The
-`usage-gate` hook refuses the dispatch anyway if you miss this — checking first is the difference
-between stopping cleanly and being stopped.
+`usage.stale_after_s` seconds, and shows a window at or over its threshold in `usage` — a threshold of
+`0` means that window is deliberately unguarded — do not dispatch. Park instead: record the in-flight
+task in `spine.plan` under `## Active` with what is done and what remains, then say in one line that
+you paused, which window, and how work resumes. The `usage-gate` hook refuses the dispatch anyway if
+you miss this; checking first is the difference between stopping cleanly and being stopped.
+
+Do **not** invent a resume mechanism. For a reset under 24 hours away Claude Code continues an
+interrupted task by itself, which is why `five_hour_pct` ships at `0`. For a reset further out it does
+not, and the honest answer is the plan entry plus telling the user that `/rate-limit-options` can arm a
+wait that counts down past 24 hours while the session stays open.
 
 No such file means there is nothing to check: an API key never reports a rate limit, and a status line
 without `bin/kit-usage-probe.sh` wired in reports nothing either.

@@ -33,10 +33,23 @@ DEFAULT_TOOLS = ["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "Bash"
 MEMORY_SCOPES = ("project", "local", "user")
 
 # Autonomous pause thresholds, as a percentage of a subscription rate-limit window.
-# Defaults: stop well before the 5-hour window closes, and much closer to the edge on the
-# 7-day one — running out of the weekly allowance costs days rather than hours, so a wide
-# margin there forgoes more work than it saves.
-DEFAULT_USAGE = {"five_hour_pct": 90, "seven_day_pct": 95, "stale_after_s": 900}
+# 0 means "never pause on this window".
+#
+# The two windows want OPPOSITE strategies, which is why the 5-hour one defaults to off
+# (corrected 2026-10-03 after reading what Claude Code already does):
+#
+#   5-hour — LET IT RIDE. When a usage limit stops Claude mid-task, Claude Code waits in
+#     the open session and continues the task itself after the reset, on by default for an
+#     interactive claude.ai session. That is genuinely unattended. A preemptive pause
+#     cannot improve on it and actively PREVENTS it: the wait arms on hitting the limit,
+#     so stopping at 90% means nothing ever arms and nothing ever resumes. Pausing here
+#     buys clean task boundaries and costs the automatic resume.
+#
+#   7-day — PAUSE. Claude Code does not start that wait on its own for a reset more than
+#     24 hours away, and a weekly limit can reset days out. So being interrupted mid-task
+#     here leaves a role's work half-done with nothing to resume it, and stopping cleanly
+#     with the plan written is strictly better.
+DEFAULT_USAGE = {"five_hour_pct": 0, "seven_day_pct": 95, "stale_after_s": 900}
 _USAGE_KEYS = tuple(DEFAULT_USAGE)
 
 
@@ -380,11 +393,12 @@ class KitConfig:
                 f"and the pause would fire somewhere you did not choose.")
         for key in ("five_hour_pct", "seven_day_pct"):
             v = self.usage[key]
-            if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 100:
+            if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 100:
                 raise ConfigError(
-                    f"usage.{key} must be an integer percentage between 1 and 100, got "
-                    f"{v!r}. 0 would pause before any work and 100 never pauses at all; "
-                    f"to disable the pause, leave the status-line probe unwired.")
+                    f"usage.{key} must be an integer percentage from 0 to 100, got {v!r}. "
+                    f"0 means never pause on that window, which is the default for "
+                    f"five_hour_pct: Claude Code's own wait continues an interrupted task "
+                    f"after a reset under 24 hours away, and pausing first prevents it.")
         st = self.usage["stale_after_s"]
         if isinstance(st, bool) or not isinstance(st, int) or st < 60:
             raise ConfigError(

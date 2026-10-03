@@ -575,11 +575,30 @@ rendering, so in a long unattended run the newest reading can be old. Pausing on
 that could have continued, so a reading older than `usage.stale_after_s` is ignored. The honest
 consequence, which the README states: **this reduces overrun, it does not guarantee against it.**
 
-**Resumption has a durable half and a scheduled half, in that order.** A one-shot scheduled task exists
-only in the session that created it and fires only while that session is idle, so it cannot be the
-record. The plan entry is: `spine.plan`'s `## Active` row says what is done and what remains, the
-`session-start` hook reports it to the next session, and `/next-task` resumes from it. The scheduled
-task is what makes the common case unattended; the plan is what makes it recoverable.
+**Resumption is Claude Code's job, not the kit's** (corrected 2026-10-03). When a usage limit stops
+Claude mid-task, Claude Code waits in the open session and continues the task itself after the reset —
+on by default for an interactive claude.ai session, v2.1.234+. The first version of this feature built a
+scheduled-task resumer instead, which was not merely redundant: the native wait arms on *hitting* the
+limit, so pausing at 90% guaranteed it never armed. The kit disabled the better mechanism and replaced
+it with a worse one.
+
+So the two windows get opposite treatment, and the division is Claude Code's own behaviour:
+
+| Window | `usage` default | Who resumes |
+|---|---|---|
+| 5-hour | `five_hour_pct: 0` — never pause | Claude Code, automatically |
+| 7-day | `seven_day_pct: 95` — pause | Nobody. Claude Code does not start the wait on its own for a reset more than 24 hours away, and a weekly limit can reset days out |
+
+The gate blocks **new dispatches only**, which turns out to be exactly right for this split: a task
+already running rides into the limit and is continued, while no new task is started that cannot be
+finished. `spine.plan`'s `## Active` row remains the durable record — the `session-start` hook reports
+it and `/next-task` resumes from it — because for the 7-day case nothing else will.
+
+**Two prerequisites for unattended operation, neither of them the kit's to fix, both reported by
+`/kit-doctor`.** An untrusted workspace has every `permissions.allow` entry ignored, so a continued turn
+stalls on its first command — that is a *note*, since the kit works untrusted and what trust buys is
+autonomy. `autoContinueAtUsageLimit` turned off is a *failure*, because it removes the mechanism the
+5-hour default assumes.
 
 **What the gate does not do.** It blocks dispatch only. Blocking everything would prevent the parking
 the refusal demands, and it is not a spend control: it reads a percentage Claude Code reports and acts

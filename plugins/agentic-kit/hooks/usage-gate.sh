@@ -32,7 +32,7 @@ snap="${CLAUDE_KIT_USAGE_FILE:-${HOME:-/nonexistent}/.claude/kit-usage.json}"
 
 five_pct=""; seven_pct=""; stale_after=""
 kit_read_nul five_pct seven_pct stale_after < <(jq -j '
-  ((.usage.five_hour_pct? // 90) | tostring), "\u0000",
+  ((.usage.five_hour_pct? // 0) | tostring), "\u0000",
   ((.usage.seven_day_pct? // 95) | tostring), "\u0000",
   ((.usage.stale_after_s? // 900) | tostring), "\u0000"' "$KIT_LOCK" 2>/dev/null)
 
@@ -49,7 +49,11 @@ kit_read_nul verdict window used resets < <(jq -j \
   --argjson five "${five_pct:-90}" \
   --argjson seven "${seven_pct:-95}" '
   def over($w; $limit; $name):
-    if ($w | type) == "object" and ($w.used_percentage // 0) >= $limit
+    # $limit == 0 disables the window entirely. The 5-hour window ships disabled because
+    # the wait-and-continue that Claude Code runs itself picks an interrupted task back up
+    # after a reset under 24 hours out, and pausing before the limit means it never arms.
+    # (No apostrophes in here: this comment is inside a single-quoted jq program.)
+    if $limit > 0 and ($w | type) == "object" and ($w.used_percentage // 0) >= $limit
     then {name: $name, used: $w.used_percentage, resets: ($w.resets_at // 0)}
     else empty end;
   def fields($a; $b; $c; $d): ($a, "\u0000", $b, "\u0000", $c, "\u0000", $d, "\u0000");
@@ -71,11 +75,24 @@ if [ "${resets:-0}" -gt 0 ] 2>/dev/null; then
   when=$(date -d "@$resets" '+%H:%M on %Y-%m-%d' 2>/dev/null || echo "epoch $resets")
 fi
 
-kit_deny "Paused: ${used}% of this account's ${window} limit is spent, at or past the ${window} threshold in the profile's \`usage\`. Dispatching more work now risks running out mid-task, which leaves a role's work half-done and unrecorded.
+# How the user gets going again depends on how far off the reset is, and the difference is
+# Claude Code's own behaviour, not the kit's: it starts a wait-and-continue by itself only
+# for a reset less than 24 hours away.
+far=0
+if [ "${resets:-0}" -gt 0 ] 2>/dev/null; then
+  [ $(( resets - $(date +%s) )) -gt 86400 ] && far=1
+fi
+if [ "$far" -eq 1 ]; then
+  resume="Claude Code does NOT start its own wait-and-continue for a reset more than 24 hours away, so nothing will resume this by itself. Tell the user they can arm one now from /rate-limit-options (\"Wait here, then continue automatically\" keeps counting down past 24 hours, as long as this session stays open), or simply come back after ${when} and run /next-task — the plan entry above is what makes that possible."
+else
+  resume="This reset is less than 24 hours away, so if work had continued until the limit actually stopped it, Claude Code would have waited and picked the task up by itself. Stopping short of the limit is what prevents that, which is why five_hour_pct ships at 0. Tell the user they can resume with /next-task after ${when}, or lower this threshold to 0 to let future runs ride into the limit and be continued automatically."
+fi
+
+kit_deny "Paused: ${used}% of this account's ${window} limit is spent, at or past the ${window} threshold in the profile's \`usage\`. Starting another task now risks running out mid-task, which leaves a role's work half-done and unrecorded.
 
 Do this, in order, and then stop:
-  1. Record the state in the plan: move the in-flight task to '## Active' with what is done and what remains, so a later session can resume without you. This is the durable half — do it first.
-  2. Schedule the resume for just after ${when}, when the ${window} window resets: create a ONE-SHOT scheduled task for that time whose prompt is '/next-task'. It fires only while this session is idle and exists only in this session, so if the session ends the plan entry above is what carries the work forward.
-  3. Say in one line that you have paused, which window, and when you will resume.
+  1. Record the state in the plan: move the in-flight task to '## Active' with what is done and what remains. This is the durable half — do it first, because it is what lets any later session pick the work up.
+  2. ${resume}
+  3. Say in one line that you have paused, which window, and how work resumes.
 
 Do not retry this dispatch, and do not start the task yourself instead."

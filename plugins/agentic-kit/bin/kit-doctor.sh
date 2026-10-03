@@ -224,6 +224,29 @@ else
   fi
 fi
 
+# --- what an unattended continue needs ------------------------------------
+# When a usage limit stops Claude mid-task, Claude Code waits and continues the task
+# itself after the reset -- but the continued turn asks for permissions as usual, and an
+# untrusted workspace has every `permissions.allow` entry ignored. So an unattended
+# continue in an untrusted checkout stalls on the first command it needs to run, which
+# looks like the resume not working rather than like a trust problem.
+trust=$(jq -r --arg p "$root" '.projects[$p].hasTrustDialogAccepted // false' \
+  "${HOME:-/nonexistent}/.claude.json" 2>/dev/null)
+if [ "$trust" = "true" ]; then
+  ok "workspace trusted" "permissions.allow is in effect, so a continued turn can run"
+else
+  note "workspace trusted" "not trusted yet, so every permissions.allow entry is IGNORED and each command prompts. The deny rules and all the hooks still work -- what this costs is unattended operation: a continue after a usage-limit reset stalls on the first command it needs. Accept the trust dialog here once, or set projects[\"$root\"].hasTrustDialogAccepted: true in ~/.claude.json."
+fi
+
+# The wait is on by default for an interactive subscription session, so this reports only
+# an explicit opt-out -- which would silently remove the thing the 5-hour window relies on.
+for sf in "${HOME:-/nonexistent}/.claude/settings.json" "/etc/claude-code/managed-settings.json"; do
+  [ -f "$sf" ] || continue
+  if [ "$(jq -r '.autoContinueAtUsageLimit | tostring' "$sf" 2>/dev/null)" = "false" ]; then
+    bad "auto-continue at usage limit" "turned off in ${sf}. With it off, hitting the 5-hour limit stops work until someone returns -- and the kit leaves that window unguarded precisely because Claude Code would otherwise continue the task itself."
+  fi
+done
+
 # --- what no script can test from here ------------------------------------
 echo
 cat <<'NOTE'
