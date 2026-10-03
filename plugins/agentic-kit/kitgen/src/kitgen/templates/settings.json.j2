@@ -15,6 +15,14 @@
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
+      {# `git add <path>` is required, not a convenience: `git commit --only <path>` cannot
+         commit a file git is not yet tracking, so without this a role can never commit a
+         file it created — and most tasks create one. Found by running the dispatch loop
+         on a real repository (M2.1), where the architect produced a contracts document,
+         an ADR and 13 passing tests and then could not commit any of them.
+         Safe because the four sweep forms are DENIED below and "deny rules from any scope
+         are evaluated before allow rules", so this cannot widen them. #}
+      "Bash(git add:*)",
       "Bash(git commit --only:*)",
       "Bash(git switch:*)",
       "Bash(git worktree add:*)",

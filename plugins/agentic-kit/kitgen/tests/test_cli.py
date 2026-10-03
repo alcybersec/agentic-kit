@@ -287,7 +287,7 @@ def test_a_directory_where_a_file_belongs_is_refused_before_any_write(tmp_path, 
     err = capsys.readouterr().err
     assert rc == 3
     assert ".claude/agents/backend.md" in err
-    assert "--force does not remove these" in err
+    assert "--force does not clear these" in err
     assert _tree(tmp_path) == before
 
 
@@ -546,3 +546,29 @@ def test_without_merge_the_curated_files_are_refused_not_replaced(tmp_path):
     before = _tree(tmp_path)
     assert main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path)]) == 3
     assert _tree(tmp_path) == before
+
+
+def test_an_unwritable_target_is_refused_before_anything_is_written(tmp_path, capsys):
+    """Found by the M2 retrofit of a real repository: `.claude/settings.json` was
+    deliberately mode 444, and the run merged CLAUDE.md, wrote an agent card, then failed
+    with exit 4 and a half-installed tree. `os.access` reports the condition up front, so
+    it belongs in the preflight with the other obstructions `--force` cannot clear."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file permissions")
+    _seed_spine(tmp_path)
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    locked = tmp_path / ".claude/settings.json"
+    locked.write_text('{"permissions": {"allow": ["Bash(make:*)"]}}')
+    locked.chmod(0o444)
+    before = _tree(tmp_path)
+    try:
+        rc = main(["render", "--profile", str(FIXTURE), "--out", str(tmp_path),
+                   "--merge", "--force"])
+        err = capsys.readouterr().err
+    finally:
+        locked.chmod(0o644)
+    assert rc == 3, "a predictable obstruction is a refusal, not a partial write"
+    assert ".claude/settings.json" in err
+    assert "cannot write" in err and "nothing has been written" in err
+    assert _tree(tmp_path) == before
+    assert locked.read_text() == '{"permissions": {"allow": ["Bash(make:*)"]}}'

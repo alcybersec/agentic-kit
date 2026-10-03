@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import json
 import sys
 from pathlib import Path
@@ -116,6 +117,16 @@ def _blockers(out: Path, manifest: dict[str, str]) -> list[str]:
     """
     bad: set[str] = set()
     for rel in manifest:
+        # An existing target the process cannot write is the same kind of obstruction as a
+        # directory in the way: predictable before any write, and not --force's to clear.
+        # Found during the M2 retrofit of a real repository, where `.claude/settings.json`
+        # was deliberately mode 444 — the run wrote CLAUDE.md and one agent card, then
+        # failed with exit 4 and a half-installed tree, for a condition `os.access` reports
+        # up front.
+        target = out / rel
+        if target.is_file() and not os.access(target, os.W_OK):
+            bad.add(rel)
+            continue
         parts = rel.split("/")
         for depth in range(1, len(parts) + 1):
             sub = "/".join(parts[:depth])
@@ -270,10 +281,11 @@ def main(argv: list[str] | None = None) -> int:
         return 3 if clashes or blockers else 0
 
     if blockers:
-        print(f"refusing to write: {blockers} stand in the way -- a file where a "
-              f"directory must be created, or a directory where a file must be "
-              f"written. --force does not remove these, because they are not the "
-              f"kit's to delete. Move or delete them by hand and re-run.",
+        print(f"refusing to write: {blockers} stand in the way -- a file this process "
+              f"cannot write, a file where a directory must be created, or a directory "
+              f"where a file must be written. --force does not clear these, because they "
+              f"are not the kit's to delete or chmod. Fix them by hand and re-run; "
+              f"nothing has been written.",
               file=sys.stderr)
         return 3
     if clashes:

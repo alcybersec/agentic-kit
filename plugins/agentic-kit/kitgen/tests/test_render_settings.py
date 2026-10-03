@@ -227,3 +227,20 @@ def test_a_github_project_gets_github_read_verbs(load_variant):
 def test_a_forgeless_project_allows_no_forge_cli(load_fixture):
     allow = settings(load_fixture("greenfield_prd"))["permissions"]["allow"]
     assert not any(a.startswith("Bash(gh") or a.startswith("Bash(glab") for a in allow)
+
+
+def test_a_role_can_stage_a_file_it_created(load_fixture):
+    """`git commit --only <path>` cannot commit an untracked file, so without `git add`
+    a role can never commit anything it created — and most tasks create something. Found
+    by running the dispatch loop on a real repository: the architect produced a contracts
+    document, an ADR and 13 passing tests, then could not commit any of them because
+    `git add` was in neither the allow nor the deny list and therefore prompted.
+
+    Safe because the sweeps are denied and deny is evaluated first, which this asserts
+    together so the pair cannot drift apart."""
+    for name in ("greenfield_prd", "python_monolith", "services_layout"):
+        perms = settings(load_fixture(name))["permissions"]
+        assert "Bash(git add:*)" in perms["allow"], name
+        for sweep in ("Bash(git add -A:*)", "Bash(git add .:*)",
+                      "Bash(git add --all:*)", "Bash(git add -u:*)"):
+            assert sweep in perms["deny"], (name, sweep)
