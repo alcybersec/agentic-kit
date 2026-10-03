@@ -28,6 +28,7 @@ from jinja2 import UndefinedError
 
 from .model import KitConfig
 from .render import is_preserved, render
+from .upgrade import inspect as upgrade_inspect
 from .verify import advise, verify
 
 NOTES_HEADING = "## Project-specific notes"
@@ -160,6 +161,12 @@ def main(argv: list[str] | None = None) -> int:
                         "permission lists instead of replacing either (implies --force "
                         "for those two files only)")
 
+    u = sub.add_parser("upgrade", help="report what a re-render would not tell you: "
+                                      "orphans from an older render, and living documents "
+                                      "missing headings the templates now carry")
+    u.add_argument("--profile", type=Path, required=True)
+    u.add_argument("--root", type=Path, required=True)
+
     v = sub.add_parser("verify", help="check that the profile renders a consistent kit and that its "
                           "inherited docs are present on disk")
     v.add_argument("--profile", type=Path, required=True)
@@ -193,6 +200,18 @@ def main(argv: list[str] | None = None) -> int:
         # as "verification problems" -- a materially wrong diagnosis.
         print(f"invalid profile: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
+
+    if args.cmd == "upgrade":
+        # A report, not a change: 0 means nothing to review, 1 means read the lines above
+        # before re-rendering. It deliberately does not render anything itself — mixing a
+        # report with a write is how an upgrade becomes something nobody dares run.
+        findings = upgrade_inspect(cfg, args.root)
+        for f in findings:
+            print(f)
+        if not findings:
+            print("nothing to review: no orphans, and every living document still carries "
+                  "the headings its template renders.")
+        return 1 if findings else 0
 
     if args.cmd == "verify":
         problems = verify(manifest, cfg, project_root=args.root)

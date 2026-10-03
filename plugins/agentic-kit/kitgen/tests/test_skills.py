@@ -9,9 +9,9 @@ SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 EXPECTED = {"next-task", "gate-check", "handoff", "new-adr", "risk",
             "plan-status", "agent-memory", "orchestrating", "kit-doctor",
-            "kit-init"}
+            "kit-init", "kit-upgrade"}
 # Skills the user invokes deliberately; the model must not fire them on its own.
-EXPLICIT_ONLY = {"next-task", "gate-check", "kit-init"}
+EXPLICIT_ONLY = {"next-task", "gate-check", "kit-init", "kit-upgrade"}
 
 
 def frontmatter(path: Path) -> dict:

@@ -231,14 +231,16 @@ def test_the_readme_documents_what_exists_and_not_what_does_not():
     assert "/kit-doctor" in text
     assert "/kit-init" in text, "the way in must be the first thing documented"
     assert "--merge" in text, "a retrofit is the common case and must not be a footnote"
-    # `/kit-upgrade` is the one installer skill still unbuilt, so it must stay marked.
-    i = text.find("/kit-upgrade")
-    assert i != -1, "/kit-upgrade should be named as not-yet-shipped"
-    assert "M2" in text[i - 250:i + 250], "/kit-upgrade must be marked M2 where it appears"
+    # Every installer skill now exists, so nothing here may be described as pending: a
+    # README that points at an unbuilt skill is the same failure as having no way in.
+    assert "/kit-upgrade" in text
+    assert "Still M2" not in text and "not-yet-shipped" not in text
     for gone in ("/kit-install", "/kit-retrofit"):
         assert gone not in text, (
             f"{gone} was superseded by /kit-init; naming it sends the user to a skill "
             f"that does not exist")
+    for skill in ("/kit-init", "/kit-upgrade", "/kit-doctor"):
+        assert text.count(skill) >= 2, f"{skill} should be both listed and explained"
 
 
 # --- the documented install path, followed literally --------------------------

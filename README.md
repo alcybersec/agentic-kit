@@ -98,8 +98,9 @@ It replaces the role cards and the lock, and — **unless you pass `--merge`** �
 `.claude/settings.json` too, since a profile change has to reach them. Pass `--merge` on any project
 whose `CLAUDE.md` or `settings.json` you care about; `/kit-init` does.
 
-Still M2: `/kit-upgrade`, which would diff a new plugin version's templates against the tree and offer
-the stable-scaffolding changes as a patch (design §7.1a).
+`/kit-upgrade` does this for you in three steps that report before they change anything: inspect
+(orphans, living documents missing sections the templates now render, a role with no design section),
+re-render, verify.
 
 ### Which model each role runs on
 
@@ -135,6 +136,7 @@ role outright**.
 | `/orchestrating` | dispatch doctrine: worktrees, path-not-paste, atomic commits |
 | `/kit-doctor` | prove the guards are firing |
 | `/kit-init` | install the kit into a project (declines where one exists) |
+| `/kit-upgrade` | bring an installed kit up to the current plugin: inspect, re-render, verify |
 
 ## Usage limits: what Claude Code already does, and what the kit adds
 

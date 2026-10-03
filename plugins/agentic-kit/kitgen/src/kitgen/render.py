@@ -44,6 +44,14 @@ SPINE_SINGLETONS = {
 # architect owns by convention in every generated roster.
 ADR_0001 = "docs/adr/0001-adopt-agentic-kit.md"
 
+# A record of what this render wrote, so a later upgrade can find ORPHANS exactly rather
+# than by guessing. Without it an upgrade cannot know what an older version of the plugin
+# rendered: a spine rename leaves the old document behind, and plugin 1.1.0 left a dead
+# `.claude/hooks/ownership-guard.sh` that looked like an enforcement hook and ran never.
+# Separate from the lock on purpose — §5.1 defines the lock as the resolved *profile*, and
+# `verify()` asserts it equals `cfg.to_lock()`, so a path list does not belong in it.
+MANIFEST_RECORD = ".claude/kit.manifest.json"
+
 # Written on a fresh install and never re-rendered over: see design spec §7.1a.
 # plan/README.md is pure dispatch state after the first task, and adr-0001 stamps
 # the install's date and kit version.
@@ -131,4 +139,9 @@ def render(cfg: KitConfig) -> dict[str, str]:
         out[f".claude/agents/{r.name}.md"] = role_card.render(role=r, **ctx)
         out[f".claude/agent-memory/{r.name}/MEMORY.md"] = memory.render(role=r, **ctx)
 
+    # Last, so it can list everything else. It does not list itself: a record that
+    # includes its own path reads as though the file were content rather than bookkeeping.
+    out[MANIFEST_RECORD] = json.dumps(
+        {"kit_version": cfg.kit_version, "rendered_on": cfg.rendered_on,
+         "paths": sorted(out)}, indent=2) + "\n"
     return out

@@ -12,6 +12,10 @@ def expected_paths(cfg):
         "CLAUDE.md",
         ".claude/kit.yaml",
         ".claude/kit.lock.json",
+        # The record of what this render wrote, so a later upgrade finds orphans exactly
+        # rather than by guessing. Separate from the lock, which §5.1 defines as the
+        # resolved profile and which verify() asserts equals cfg.to_lock().
+        ".claude/kit.manifest.json",
         ".claude/agents/orchestrator.md",
         ".claude/settings.json",
         "docs/plan/README.md",

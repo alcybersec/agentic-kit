@@ -329,6 +329,7 @@ the official marketplace plugins.
 | `risk` | Add or update a row in `spine.risks`. |
 | `plan-status` | Read-only grounding: milestone, next task, open gates, open risks. |
 | `kit-init` | Install the kit into a project, greenfield or mid-work (added 2026-10-02, replacing the planned `kit-install`/`kit-retrofit` split — the detection is identical and the only difference was whether code existed). Detects name, toolchain, forge and CI from the git remote, secrets from `.gitignore`, authoritative documents, and the directory shape; asks in at most two turns for the roster with its ownership map and the floors; writes `.claude/kit.yaml`; dry-runs; renders with `--merge` where the project already has a `CLAUDE.md` or `settings.json`; finishes with `/kit-doctor`. **Stops if a lock already exists.** User-invoked only, and it never dispatches a subagent: the roster is the user's decision. |
+| `kit-upgrade` | Bring an installed kit up to the current plugin, in three steps that report before they change anything: `kitgen upgrade` (orphans, living documents missing sections the templates now render, a role with no design section, the version delta), then `render --force --merge`, then `/kit-doctor`. Added 2026-10-03 (M2.2). It is an **inspector**, not the template-diff engine originally planned, because the work since M1 dissolved most of that problem: `--force` already preserves the living set and lists both halves, `--merge` already handles CLAUDE.md and settings.json, and `/kit-doctor` already reports a stale version, lock drift and a stale role card. What was left is what those three cannot see. It never deletes an orphan: the renderer does not remove files on purpose, a relocated document may hold the project's work, and the path alone does not say which case it is. |
 | `kit-doctor` | Run `bin/kit-doctor.sh`: fire every guard with a payload it must refuse and report which ones did, plus `jq`, the lock's readability, lock-vs-profile freshness, the formatter's presence on PATH, and whether each role card registers the ownership guard. Added 2026-10-01 (fix 1.2). It exists because §4.3's inertness rule makes a **disarmed** guard and a **correctly inert** one indistinguishable: everything exits 0, and Claude Code reads any non-2 exit as "continue". Nothing else in the kit can tell the two apart. Exit 0 all-clear, 1 otherwise, and it states the two things no script can check — workspace trust and Bash. |
 | `agent-memory` | The `.claude/agent-memory/<role>/MEMORY.md` convention: one fact per file, a one-line linked index entry per fact, `[[wikilinks]]` between facts. |
 | `orchestrating` | Dispatch doctrine: pass paths not pasted documents; `git commit --only <path>`; `isolation: "worktree"` when 2+ agents are dispatched in one message or scopes overlap; worktree merge protocol; never `git stash` for recovery. |
@@ -825,6 +826,21 @@ manifest against what is actually on disk, so a hand-edited or corrupted `CLAUDE
 comparison is `/kit-upgrade`'s job in M2, and it needs this classification to do it: a difference in
 *stable scaffolding* is drift to offer as a patch, a difference in a *living* document is expected and
 must be left alone, and a *generate-once* file is never compared at all.
+
+### 7.1a-bis The render records what it wrote (added 2026-10-03)
+
+`.claude/kit.manifest.json` lists the paths a render produced, with the `kit_version` and `rendered_on`
+that produced them. It makes **orphan detection exact**: a file an earlier render wrote and a later one
+does not, which §7.1a's classification cannot express because it is about files that *are* rendered.
+
+Kept separate from the lock deliberately. §5.1 defines the lock as the resolved profile and §9.1 asserts
+it equals `cfg.to_lock()`, so a list of output paths does not belong in it.
+
+It cannot see before it existed, so `upgrade.LEGACY_PATHS` enumerates the paths earlier versions
+rendered — the six default spine documents and the pre-1.1.0 `.claude/hooks/ownership-guard.sh`. An
+enumerated bridge rather than a heuristic, because both orphans that exist in the wild today predate the
+record: relocating a `spine.*` path leaves the default behind, and 1.1.0 moved the guard into the plugin
+and left a dead copy that looked like an enforcement hook and ran never.
 
 ### 7.1b The CLI's exit codes are an interface
 
