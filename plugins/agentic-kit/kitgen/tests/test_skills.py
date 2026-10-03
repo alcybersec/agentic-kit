@@ -152,3 +152,15 @@ def test_kit_init_proposes_models_without_asking_role_by_role():
     assert "the Orchestrator is not asked about" in text
     assert "Do not propose the cheap model" in text
     assert "`inherit` everywhere is the conservative choice" in text
+
+
+def test_next_task_checks_the_usage_pause_before_dispatching():
+    """The gate refuses the dispatch anyway, but checking first is the difference between
+    stopping cleanly and being stopped mid-loop — and the parking has to happen either
+    way, so the skill that owns the loop should own the check."""
+    text = " ".join((SKILLS / "next-task/SKILL.md").read_text().split())
+    assert "Before dispatching, check the usage pause" in text
+    assert "kit-usage.json" in text
+    assert "ONE-SHOT task" in text and "resets_at" in text
+    assert "No such file means there is nothing to check" in text, (
+        "an API key and an unwired probe must both read as 'nothing to do'")

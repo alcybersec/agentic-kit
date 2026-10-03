@@ -199,6 +199,24 @@ else
   fi
 fi
 
+# --- the autonomous pause -------------------------------------------------
+# The gate is only as live as the status-line probe that feeds it: `rate_limits` reaches
+# user code in exactly one payload and no hook carries it. An unwired probe means the
+# pause never fires, and that is indistinguishable from a healthy kit without this check.
+snap="${CLAUDE_KIT_USAGE_FILE:-${HOME:-/nonexistent}/.claude/kit-usage.json}"
+if [ ! -f "$snap" ]; then
+  note "usage pause" "no reading at ${snap}. Either this account has no subscription rate limits (an API key never reports any, and then there is nothing to pause for), or bin/kit-usage-probe.sh is not wired into your status line — see the README. Until it is, the pause cannot fire."
+else
+  age=$(( $(date +%s) - $(jq -r '.read_at // 0' "$snap" 2>/dev/null || echo 0) ))
+  stale=$(jq -r '.usage.stale_after_s // 900' "$lock" 2>/dev/null)
+  windows=$(jq -r '[ (if .five_hour then "5h \(.five_hour.used_percentage | floor)%" else empty end), (if .seven_day then "7d \(.seven_day.used_percentage | floor)%" else empty end) ] | join(" ")' "$snap" 2>/dev/null)
+  if [ "$age" -gt "${stale:-900}" ]; then
+    note "usage pause" "last reading is ${age}s old, past usage.stale_after_s=${stale}. The gate ignores a stale reading and fails OPEN, so the pause will not fire until the status line runs again."
+  else
+    ok "usage pause" "armed; last reading ${age}s ago (${windows:-no windows in force})"
+  fi
+fi
+
 # --- what no script can test from here ------------------------------------
 echo
 cat <<'NOTE'

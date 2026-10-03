@@ -7,6 +7,17 @@ disable-model-invocation: true
 Read `.claude/kit.lock.json` in the project root (`$CLAUDE_PROJECT_DIR`, else the working directory) before anything else. If it is absent or is not valid JSON, decline in one line — "Not a kit project: no readable `.claude/kit.lock.json`" — and stop: do not scaffold, do not guess paths, do not continue from memory.
 Take every path below from the lock rather than assuming one. Only the Orchestrator runs this.
 
+**Before dispatching, check the usage pause.** If `~/.claude/kit-usage.json` exists, is newer than
+`usage.stale_after_s` seconds, and shows a window at or over its threshold in `usage`, do not dispatch.
+Park instead: record the in-flight task in `spine.plan` under `## Active` with what is done and what
+remains, schedule a ONE-SHOT task for just after that window's `resets_at` whose prompt is
+`/next-task`, and say in one line that you paused, which window, and when you resume. The
+`usage-gate` hook refuses the dispatch anyway if you miss this — checking first is the difference
+between stopping cleanly and being stopped.
+
+No such file means there is nothing to check: an API key never reports a rate limit, and a status line
+without `bin/kit-usage-probe.sh` wired in reports nothing either.
+
 1. Read `spine.plan`. Confirm the Next task is unblocked — every task it depends on is in Completed.
 2. Read its block in `spine.strategy` §11 and the owner's card in `.claude/agents/<owner>.md`.
 3. Add a row to the plan's Active table (Task, Owner, Dispatched, Worktree), then spawn the owner with

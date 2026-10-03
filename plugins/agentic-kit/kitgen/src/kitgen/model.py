@@ -32,6 +32,13 @@ DEFAULT_TOOLS = ["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "Bash"
 # `user` shares it across every project, which defeats per-project ownership.
 MEMORY_SCOPES = ("project", "local", "user")
 
+# Autonomous pause thresholds, as a percentage of a subscription rate-limit window.
+# Defaults: stop well before the 5-hour window closes, and much closer to the edge on the
+# 7-day one — running out of the weekly allowance costs days rather than hours, so a wide
+# margin there forgoes more work than it saves.
+DEFAULT_USAGE = {"five_hour_pct": 90, "seven_day_pct": 95, "stale_after_s": 900}
+_USAGE_KEYS = tuple(DEFAULT_USAGE)
+
 
 class ConfigError(ValueError):
     """A project profile violated a constraint from the design spec, §5.2."""
@@ -109,6 +116,8 @@ def _check_shapes(d: dict[str, Any]) -> None:
         if not isinstance(d[section], list):
             raise ConfigError(
                 f"{section} must be a list, got {type(d[section]).__name__}")
+    if "usage" in d and not isinstance(d["usage"], dict):
+        raise ConfigError(f"usage must be a mapping, got {type(d['usage']).__name__}")
     for section in _OPTIONAL_LIST_SECTIONS:
         if section in d and not isinstance(d[section], list):
             raise ConfigError(
@@ -188,6 +197,11 @@ class KitConfig:
     # these paths, including the one that owns the surrounding tree, and the veto role
     # is allowed them even where another role owns everything around them.
     critical: list[str] = field(default_factory=list)
+    # When to stop dispatching new work because the account's rate-limit window is nearly
+    # spent. Only ever populated for a claude.ai subscription: `rate_limits` appears in the
+    # status-line payload for Pro and Max only, so its ABSENCE is the API-key case and no
+    # separate detection is needed — the same shape as the kit's inertness rule.
+    usage: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_USAGE))
 
     @property
     def veto_role(self) -> Role:
@@ -228,6 +242,7 @@ class KitConfig:
             secrets=list(d["secrets"]),
             observability=d["observability"],
             critical=list(d.get("critical", [])),
+            usage={**DEFAULT_USAGE, **dict(d.get("usage") or {})},
         )
         cfg.validate()
         return cfg
@@ -356,6 +371,27 @@ class KitConfig:
                     f"ownership guard, which keeps each role out of the others' memory, "
                     f"only governs paths inside this project. Use 'project' (committed, "
                     f"the default) or 'local' (not committed).")
+
+        unknown = set(self.usage) - set(_USAGE_KEYS)
+        if unknown:
+            raise ConfigError(
+                f"usage has unknown keys: {sorted(unknown)}. Expected "
+                f"{list(_USAGE_KEYS)}; a misspelled threshold would load as the default "
+                f"and the pause would fire somewhere you did not choose.")
+        for key in ("five_hour_pct", "seven_day_pct"):
+            v = self.usage[key]
+            if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 100:
+                raise ConfigError(
+                    f"usage.{key} must be an integer percentage between 1 and 100, got "
+                    f"{v!r}. 0 would pause before any work and 100 never pauses at all; "
+                    f"to disable the pause, leave the status-line probe unwired.")
+        st = self.usage["stale_after_s"]
+        if isinstance(st, bool) or not isinstance(st, int) or st < 60:
+            raise ConfigError(
+                f"usage.stale_after_s must be an integer of at least 60, got {st!r}. It is "
+                f"how old a usage reading may be before the gate ignores it: too short and "
+                f"a gap in status-line refreshes reopens the gate, too long and a stale "
+                f"reading pauses work that could have continued.")
 
         # The one combination the kit refuses. The veto role produces the Floors
         # dimension of every gate and signs it APPROVE or VETO, which the Orchestrator

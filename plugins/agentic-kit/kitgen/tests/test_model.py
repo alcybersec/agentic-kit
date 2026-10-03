@@ -623,17 +623,24 @@ def test_default_tools_cover_the_tools_the_guards_police():
     matchers = _json.loads(
         (_P(__file__).resolve().parents[2] / "hooks/hooks.json").read_text()
     )["hooks"]["PreToolUse"]
+    # Only the matchers that police FILE tools belong in this comparison. The usage gate
+    # matches `Agent|Task` to stop the ORCHESTRATOR dispatching when a rate-limit window
+    # is nearly spent, which has nothing to do with what a role may hold.
     policed = set()
     for entry in matchers:
-        policed |= {t for t in entry.get("matcher", "").split("|") if t != "Read"}
-    # Guard broadly, grant narrowly. `MultiEdit` is matched defensively — harmless if the
-    # host has no such tool, the whole guard if it does — but it is deliberately NOT
-    # granted, because listing a tool that may not exist in a role card's frontmatter is
-    # a claim about the host that the kit cannot check. Every tool the kit DOES grant and
-    # police must appear in both.
+        tools = set(entry.get("matcher", "").split("|"))
+        if tools & {"Agent", "Task"}:
+            continue
+        policed |= tools - {"Read"}
     granted = set(DEFAULT_TOOLS)
+    # Guard broadly, grant narrowly, for two different reasons. `MultiEdit` is matched
+    # defensively — harmless if the host has no such tool, the whole guard if it does —
+    # but not granted, because listing a tool that may not exist is a claim about the host
+    # the kit cannot check. `Agent`/`Task` are never granted either, for a stronger
+    # reason: spawn depth is 1 and only the Orchestrator dispatches.
     assert policed - granted == {"MultiEdit"}, sorted(policed - granted)
     assert {"Edit", "Write", "NotebookEdit"} <= policed & granted
+    assert not ({"Agent", "Task"} & granted), "a role must never dispatch"
 
 
 def test_default_tools_let_a_role_track_multi_step_work():

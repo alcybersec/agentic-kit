@@ -221,3 +221,39 @@ def test_a_matching_kit_version_draws_no_note(tmp_path, load_fixture):
     r = doctor(root)
     assert f"kit version                        ok      {plugin_ver}" in r.stdout
     assert r.returncode == 0
+
+
+def test_the_doctor_says_whether_the_usage_pause_is_armed(tmp_path, load_fixture):
+    """The gate is only as live as the status-line probe feeding it, and an unwired probe
+    is indistinguishable from a healthy kit — which is exactly the class of invisible
+    off-switch this script exists for."""
+    root = install(tmp_path, load_fixture("python_monolith"))
+    import os as _os
+    env_absent = dict(PATH="/usr/bin:/bin", CLAUDE_PROJECT_DIR=str(root),
+                      CLAUDE_KIT_USAGE_FILE=str(tmp_path / "absent.json"))
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True,
+                       env=env_absent)
+    assert "usage pause" in r.stdout and "note" in r.stdout
+    assert "not wired" in r.stdout
+    assert "FAIL" not in r.stdout, "an unwired probe is a judgement call, not a failure"
+
+    snap = tmp_path / "u.json"
+    snap.write_text(json.dumps({"read_at": int(__import__("time").time()),
+                                "five_hour": {"used_percentage": 12.7,
+                                              "resets_at": 1}}))
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True,
+                       env={**env_absent, "CLAUDE_KIT_USAGE_FILE": str(snap)})
+    assert "armed" in r.stdout and "5h 12%" in r.stdout
+    assert r.returncode == 0
+
+
+def test_the_doctor_flags_a_stale_usage_reading(tmp_path, load_fixture):
+    root = install(tmp_path, load_fixture("python_monolith"))
+    snap = tmp_path / "u.json"
+    snap.write_text(json.dumps({"read_at": int(__import__("time").time()) - 9000,
+                                "five_hour": {"used_percentage": 99, "resets_at": 1}}))
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root),
+                            "CLAUDE_KIT_USAGE_FILE": str(snap)})
+    assert "fails OPEN" in r.stdout
+    assert r.returncode == 0, "a stale reading is a note, not a failure"

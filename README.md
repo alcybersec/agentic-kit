@@ -128,6 +128,47 @@ role outright**.
 | `/kit-doctor` | prove the guards are firing |
 | `/kit-init` | install the kit into a project (declines where one exists) |
 
+## Pausing before a subscription limit runs out
+
+The kit can stop dispatching work when the account's rate-limit window is nearly spent, and resume
+itself when the window resets. Two thresholds, in the profile, defaulting to:
+
+```yaml
+usage:
+  five_hour_pct: 90      # pause at 90% of the 5-hour window
+  seven_day_pct: 95      # and 95% of the 7-day one
+  stale_after_s: 900     # ignore a usage reading older than this
+```
+
+**It needs one line of wiring, because of where the data lives.** `rate_limits` reaches user code in
+exactly one payload — the status line's — and no hook event carries it. So the status line is the
+sensor:
+
+```bash
+# in your status line script, after you have read stdin into "$input":
+printf '%s' "$input" | bash "$HOME/.claude/plugins/cache/agentic-kit/agentic-kit/<version>/bin/kit-usage-probe.sh"
+```
+
+The probe prints nothing, so it cannot disturb your layout; pass `--print` if you want a `5h 23% 7d 41%`
+segment. It writes `~/.claude/kit-usage.json`, per account rather than per project, since a rate limit
+is not a property of a repository. `/kit-doctor` reports whether the pause is **armed** and how old the
+last reading is.
+
+**Nothing to configure for an API key.** `rate_limits` appears only for claude.ai Pro and Max, so its
+absence *is* the API-key case: no snapshot, no pause, no detection needed.
+
+**What happens at the threshold.** The `usage-gate` hook refuses new dispatches — and only dispatches,
+so the Orchestrator can still write down where the work stopped. Its message carries the protocol: park
+the in-flight task in the plan first (durable), then schedule a one-shot `/next-task` for just after the
+window's reset, then say so in one line. `/next-task` checks before dispatching, so the ordinary case is
+a clean stop rather than a refusal.
+
+**Two honest limits.** A scheduled task lives only in the session that created it, so the plan entry is
+what carries the work across a session that ends — and `SessionStart` reports the in-flight task, so the
+next session picks it up. And a reading older than `stale_after_s` is **ignored**: the status line stops
+being invoked when a session is not rendering, and pausing on an hour-old number would stop work that
+could have continued. This reduces overrun; it does not guarantee against it.
+
 ## What the guards do, and what they do not
 
 `pre-bash-guard` blocks staging sweeps, destructive git, the non-chosen forge CLI, outward-facing

@@ -251,6 +251,12 @@ critical: []                       # optional: paths only the veto role may chan
   judgement the kit actually needs is "is this the cheap one". An alias or ID it does not recognise is
   allowed anywhere, because guessing a stranger's capability is worse than trusting whoever typed it.
   To run everything cheaply, choose that model for the *session*; `inherit` then carries it everywhere.
+- `usage` is **optional** and defaults to `{five_hour_pct: 90, seven_day_pct: 95, stale_after_s: 900}`.
+  Each percentage is an integer from 1 to 100 — 0 would pause before any work and 100 never pauses, so
+  the way to disable the pause is to leave the status-line probe unwired rather than to encode a
+  no-op. `stale_after_s` is at least 60: too short and a gap in status-line refreshes reopens the gate,
+  too long and a stale reading pauses work that could have continued. Unknown keys are rejected,
+  because a misspelled threshold would silently load as the default and fire somewhere nobody chose.
 - `critical` is **optional** and defaults to empty. Each entry carries the same normalisation rule as
   an `owns` glob — which also rules out a leading `./`, since `.` is a rejected segment — because the
   ownership guard matches both with the same code. A `critical` path deliberately **may** sit inside
@@ -325,6 +331,7 @@ the same worktree lesson is recorded twice in this user's notes.
 | `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
 | `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file, and **never fails a tool call** |
 | `session-start` | SessionStart | nothing — it blocks nothing. It prints into context: the kit version, roster size and milestone; the in-flight task **read from `spine.plan`** rather than asserted; the open-risk count; and two warnings nothing else surfaced automatically — §5.1's drift signal (`mtime(kit.yaml) > mtime(lock)`, meaning the hooks are enforcing a profile you have since edited) and a guard script left over from a render before plugin 1.1.0. Plain stdout, which Claude Code adds to context, so there is no schema to get wrong |
+| `usage-gate` | PreToolUse/Agent,Task | a new dispatch when a subscription rate-limit window is at or past its threshold in `usage` (default 90% of 5-hour, 95% of 7-day). **Only dispatches** — the Orchestrator keeps the file tools, because the thing it must do next is record where the work stopped. The refusal carries the whole protocol: park in `spine.plan` first because that is the durable half, then schedule a one-shot `/next-task` for just after `resets_at`. Added 2026-10-03 |
 | `ownership-guard` | PreToolUse/Edit,Write,NotebookEdit,MultiEdit | a role writing a path another role owns, a `critical` path, or any of the files enforcement itself depends on. Role from the payload's `agent_type`; no `agent_type` (the Orchestrator) or an unknown one exits 0. See §6.4 |
 | `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message`, the subagent's own `agent_transcript_path`, or a `SubagentHandback` call's `input` — any one of the three satisfies it |
 
@@ -545,6 +552,38 @@ is pinned for the same reason, since a typo there only warns.
 
 A clean `claude plugin validate` therefore means the manifest parses and the events are real. It does
 **not** mean the hooks fire. That needs a live session with the plugin installed, which is Task 17.
+
+### 6.2d The autonomous pause, and why it is shaped the way it is (added 2026-10-03)
+
+**The architecture is forced, not chosen.** `rate_limits.five_hour` and `.seven_day` — each with
+`used_percentage` and a `resets_at` epoch — reach user code in exactly **one** payload: the status
+line's. No hook event carries them, `SessionStart` included; there is no CLI that reports them; and
+`stats-cache.json` holds historical tokens and cost, not quota. So the only possible shape is **status
+line as sensor, a file as the bus, a hook as the actuator**: `bin/kit-usage-probe.sh` writes
+`~/.claude/kit-usage.json` and `hooks/usage-gate.sh` reads it.
+
+**Subscription detection is free.** `rate_limits` "appears only for claude.ai Pro and Max subscribers",
+so its absence *is* the API-key case. No snapshot is written, the gate does nothing, and no separate
+detection exists to get wrong — the same shape as §4.3's inertness rule.
+
+**The snapshot is per account, not per project**, because a rate limit is not a property of a
+repository. It carries its own `read_at`, and a window that has reset is simply absent from the payload
+— a missing window means "no limit in force", never "zero used".
+
+**A stale reading fails OPEN, deliberately.** The status line is not invoked when a session is not
+rendering, so in a long unattended run the newest reading can be old. Pausing on it would stop work
+that could have continued, so a reading older than `usage.stale_after_s` is ignored. The honest
+consequence, which the README states: **this reduces overrun, it does not guarantee against it.**
+
+**Resumption has a durable half and a scheduled half, in that order.** A one-shot scheduled task exists
+only in the session that created it and fires only while that session is idle, so it cannot be the
+record. The plan entry is: `spine.plan`'s `## Active` row says what is done and what remains, the
+`session-start` hook reports it to the next session, and `/next-task` resumes from it. The scheduled
+task is what makes the common case unattended; the plan is what makes it recoverable.
+
+**What the gate does not do.** It blocks dispatch only. Blocking everything would prevent the parking
+the refusal demands, and it is not a spend control: it reads a percentage Claude Code reports and acts
+on a threshold, with no view of cost.
 
 ### 6.2c Two output contracts, one for what each can express (added 2026-10-03)
 
