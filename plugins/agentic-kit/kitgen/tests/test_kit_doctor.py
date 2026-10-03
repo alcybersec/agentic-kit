@@ -235,6 +235,8 @@ def test_the_doctor_says_whether_the_usage_pause_is_armed(tmp_path, load_fixture
                        env=env_absent)
     assert "usage pause" in r.stdout and "note" in r.stdout
     assert "not wired" in r.stdout
+    assert "kit-usage-probe.sh does not exist" in r.stdout, (
+        "no shim and no subscription look identical from here, so say which it is")
     assert "FAIL" not in r.stdout, "an unwired probe is a judgement call, not a failure"
 
     snap = tmp_path / "u.json"
@@ -257,3 +259,24 @@ def test_the_doctor_flags_a_stale_usage_reading(tmp_path, load_fixture):
                             "CLAUDE_KIT_USAGE_FILE": str(snap)})
     assert "fails OPEN" in r.stdout
     assert r.returncode == 0, "a stale reading is a note, not a failure"
+
+
+def test_the_doctor_distinguishes_a_wired_shim_from_an_unwired_one(tmp_path, load_fixture):
+    """"No reading" has two causes with opposite meanings: an API key has no rate limits
+    and nothing to pause for, while a broken status-line wiring means the pause is
+    disarmed. Reporting them the same way makes the dangerous one invisible."""
+    root = install(tmp_path, load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root), "HOME": str(home),
+           "CLAUDE_KIT_USAGE_FILE": str(tmp_path / "absent.json")}
+
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True, env=env)
+    assert "not wired" in r.stdout and "does not exist" in r.stdout
+
+    shim = home / ".claude/kit-usage-probe.sh"
+    shim.write_text("#!/usr/bin/env bash\nexit 0\n")
+    shim.chmod(0o755)
+    r = subprocess.run(["bash", str(DOCTOR)], capture_output=True, text=True, env=env)
+    assert "shim at ~/.claude/kit-usage-probe.sh exists" in r.stdout
+    assert "not wired" not in r.stdout

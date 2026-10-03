@@ -219,3 +219,66 @@ def test_the_gate_survives_an_environment_without_home(tmp_path, load_fixture):
         env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root)})
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "unbound variable" not in r.stderr
+
+
+# --- the documented shim (fix for the version-pinned wiring) ------------------
+
+def readme_shim():
+    """Extract the shim the README tells the user to create.
+
+    It has to live in the README inline rather than be copied from the plugin, because
+    copying it would require knowing the versioned cache path — which is the very thing
+    it exists to avoid. So the documented text is the implementation, and that makes it
+    something to test rather than something to trust.
+    """
+    readme = (PLUGIN.parents[1] / "README.md").read_text()
+    start = readme.index("cat > ~/.claude/kit-usage-probe.sh <<'SHIM'\n") + len(
+        "cat > ~/.claude/kit-usage-probe.sh <<'SHIM'\n")
+    return readme[start:readme.index("\nSHIM\n", start)]
+
+
+def test_the_readme_shim_resolves_the_newest_install_and_passes_stdin(tmp_path):
+    home = tmp_path / "home"
+    cache = home / ".claude/plugins/cache/agentic-kit/agentic-kit"
+    for version in ("1.4.0", "1.5.0", "1.10.0"):
+        d = cache / version / "bin"
+        d.mkdir(parents=True)
+        (d / "kit-usage-probe.sh").write_text(
+            f'#!/usr/bin/env bash\ncat >/dev/null\nprintf "%s" "{version}"\n')
+    # 1.10.0 is the newest install but sorts BEFORE 1.9.0 as a string, so mtime is what
+    # the shim must use. Make the order explicit rather than relying on creation order.
+    import os, time
+    for i, version in enumerate(("1.4.0", "1.5.0", "1.10.0")):
+        t = time.time() + i
+        os.utime(cache / version / "bin/kit-usage-probe.sh", (t, t))
+
+    shim = tmp_path / "shim.sh"
+    shim.write_text(readme_shim())
+    r = subprocess.run(["bash", str(shim)], input='{"rate_limits":{}}',
+                       capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(home)})
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "1.10.0", (r.stdout, r.stderr)
+
+
+def test_the_readme_shim_is_silent_with_nothing_installed(tmp_path):
+    """A status line must never break because a plugin is absent."""
+    shim = tmp_path / "shim.sh"
+    shim.write_text(readme_shim())
+    r = subprocess.run(["bash", str(shim)], input="{}", capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "empty")})
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+def test_the_readme_shim_forwards_arguments(tmp_path):
+    home = tmp_path / "home"
+    d = home / ".claude/plugins/cache/agentic-kit/agentic-kit/1.5.0/bin"
+    d.mkdir(parents=True)
+    (d / "kit-usage-probe.sh").write_text(
+        '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%s" "$*"\n')
+    shim = tmp_path / "shim.sh"
+    shim.write_text(readme_shim())
+    r = subprocess.run(["bash", str(shim), "--print"], input="{}",
+                       capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(home)})
+    assert r.stdout == "--print", "--print must reach the probe or the segment never shows"

@@ -205,7 +205,14 @@ fi
 # pause never fires, and that is indistinguishable from a healthy kit without this check.
 snap="${CLAUDE_KIT_USAGE_FILE:-${HOME:-/nonexistent}/.claude/kit-usage.json}"
 if [ ! -f "$snap" ]; then
-  note "usage pause" "no reading at ${snap}. Either this account has no subscription rate limits (an API key never reports any, and then there is nothing to pause for), or bin/kit-usage-probe.sh is not wired into your status line — see the README. Until it is, the pause cannot fire."
+  # Two very different causes look identical from here, so name which one it is: an API
+  # key reports no rate limits at all and there is nothing to pause for, while a broken
+  # status-line wiring means the pause is disarmed and nothing else would say so.
+  if [ -x "${HOME:-/nonexistent}/.claude/kit-usage-probe.sh" ]; then
+    note "usage pause" "the shim at ~/.claude/kit-usage-probe.sh exists but no reading has arrived at ${snap}. Either this account has no subscription rate limits (an API key reports none, and there is nothing to pause for), or the shim is not called from your status line yet — see the README."
+  else
+    note "usage pause" "not wired: ~/.claude/kit-usage-probe.sh does not exist, so no reading can arrive and the pause cannot fire. The README has the one-time shim. Skip it deliberately if this account uses an API key."
+  fi
 else
   age=$(( $(date +%s) - $(jq -r '.read_at // 0' "$snap" 2>/dev/null || echo 0) ))
   stale=$(jq -r '.usage.stale_after_s // 900' "$lock" 2>/dev/null)

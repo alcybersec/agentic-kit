@@ -140,13 +140,38 @@ usage:
   stale_after_s: 900     # ignore a usage reading older than this
 ```
 
-**It needs one line of wiring, because of where the data lives.** `rate_limits` reaches user code in
-exactly one payload — the status line's — and no hook event carries it. So the status line is the
-sensor:
+**It needs wiring, because of where the data lives.** `rate_limits` reaches user code in exactly one
+payload — the status line's — and no hook event carries it. So the status line is the sensor.
+
+Create this shim **once**. It resolves the installed plugin at run time, so it keeps working across
+upgrades — wiring the versioned cache path directly does not, and when it breaks the sensor stops
+writing, the reading goes stale, and the gate **fails open**: the pause disarms silently, which is the
+one failure mode this kit exists to avoid.
 
 ```bash
-# in your status line script, after you have read stdin into "$input":
-printf '%s' "$input" | bash "$HOME/.claude/plugins/cache/agentic-kit/agentic-kit/<version>/bin/kit-usage-probe.sh"
+cat > ~/.claude/kit-usage-probe.sh <<'SHIM'
+#!/usr/bin/env bash
+# Stable entry point for agentic-kit's status-line usage probe.
+# Resolves the newest installed copy at run time; silent if none is installed.
+set -uo pipefail
+newest=""
+for d in "$HOME"/.claude/plugins/cache/agentic-kit/agentic-kit/*/bin/kit-usage-probe.sh; do
+  [ -f "$d" ] || continue
+  [ -z "$newest" ] || [ "$d" -nt "$newest" ] || continue
+  newest="$d"
+done
+[ -n "$newest" ] || exit 0
+exec bash "$newest" "$@"
+SHIM
+chmod +x ~/.claude/kit-usage-probe.sh
+```
+
+Newest by **mtime**, not by version string: install time is the right meaning of "the one you are
+using", and it avoids sorting `1.10.0` against `1.9.0`. Then add one line to your status line:
+
+```bash
+# after you have read stdin into "$input":
+printf '%s' "$input" | bash "$HOME/.claude/kit-usage-probe.sh"
 ```
 
 The probe prints nothing, so it cannot disturb your layout; pass `--print` if you want a `5h 23% 7d 41%`
