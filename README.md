@@ -60,9 +60,17 @@ and re-render a project that has accumulated work.
 Without `--merge` a render into such a project refuses with exit 3 and writes nothing, which is the
 safe failure but a dead end; `/kit-init` passes it for you.
 
-If you would rather write the profile by hand, the schema is §5 of the design document, the three
-fixtures under `plugins/agentic-kit/kitgen/tests/fixtures/*/profile.yaml` are worked examples, and
-`model.py` rejects every malformed profile with a message naming the field.
+If you would rather write the profile by hand, start from
+**`plugins/agentic-kit/examples/kit.yaml`** — a commented worked example, kept valid by a test that
+loads and renders it. The schema is §5 of the design document, the three fixtures under
+`plugins/agentic-kit/kitgen/tests/fixtures/*/profile.yaml` are further examples, and `model.py` rejects
+every malformed profile with a message naming the field.
+
+**If your project gitignores `.claude/` and `CLAUDE.md`** — a reasonable choice, and one of the
+repositories this kit was built against does exactly that — then nothing the kit renders is committed.
+Every worktree needs its own render, another machine gets none of it, and `memory: project` is
+per-checkout rather than shared. `/kit-doctor` detects it and says so; there is nothing to fix if that
+is what you want.
 
 Exit codes are an interface (design §7.1b): `0` written, `1` verification failed and **nothing** was
 written, `2` bad profile, `3` refused to overwrite and **nothing** was written, `4` the write failed

@@ -690,3 +690,29 @@ def test_the_disk_half_is_skipped_without_a_root(load_fixture):
     from kitgen.verify import advise
     cfg = load_fixture("python_monolith")
     assert advise(render(cfg), cfg) == []
+
+
+def test_an_unarchived_plan_is_reported(load_fixture, tmp_path):
+    """`spine.plan` is read `mode: full` at the start of every session, so every stale row
+    is charged to every prompt. The archive operation lives in /gate-check; this is what
+    makes it enforceable rather than aspirational."""
+    from kitgen.verify import PLAN_LINE_BUDGET, advise
+    cfg = load_fixture("python_monolith")
+    plan = tmp_path / cfg.spine["plan"]
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("\n".join(f"| M0-S1-BACK-{i:03d} | `backend` | done |"
+                              for i in range(PLAN_LINE_BUDGET + 50)))
+    msgs = advise(render(cfg), cfg, project_root=tmp_path)
+    hit = [m for m in msgs if cfg.spine["plan"] in m]
+    assert hit, msgs
+    assert "mode: full" in hit[0] and "/gate-check archives" in hit[0]
+
+
+def test_a_fresh_plan_draws_no_advice(load_fixture, tmp_path):
+    from kitgen.verify import advise
+    cfg = load_fixture("python_monolith")
+    man = render(cfg)
+    plan = tmp_path / cfg.spine["plan"]
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(man[cfg.spine["plan"]])
+    assert advise(man, cfg, project_root=tmp_path) == []

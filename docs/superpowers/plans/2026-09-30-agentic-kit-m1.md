@@ -1953,6 +1953,10 @@ anything.
 
 ## Completed
 
+_Rows for the milestone just closed are moved to `{{ cfg.spine.plan | replace('README.md', 'archive') }}/<id>.md`
+at its gate, leaving one pointer line here. This file is read **in full** at the start of every session
+(`load_order`), so an unarchived plan is a cost paid on every prompt for work that finished months ago._
+
 Keep the current milestone's tasks here; roll earlier milestones into `docs/plan/archive/<milestone>.md` at the gate.
 
 | Task | Owner | Branch | Evidence | Completed |

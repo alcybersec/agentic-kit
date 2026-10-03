@@ -40,6 +40,12 @@ its own: it can BLOCK, and a verdict the veto role writes itself cannot be softe
 9. In `spine.plan`, replace the `## Open gates` placeholder with an entry for this gate pointing at
    `docs/gates/$ARGUMENTS/summary.md` and its verdict. On PASS, advance `spine.plan` and expand the
    next milestone's tasks in `spine.strategy` §11.
+10. **On PASS, archive this milestone's Completed rows.** Move them out of `spine.plan` into
+    `<plan directory>/archive/$ARGUMENTS.md`, and leave one line in `## Completed` naming the
+    milestone, the task count and the archive file. `spine.plan` is read **in full** at the start of
+    every session, so every row that stays is a cost paid on every prompt for work that is finished.
+    Do not archive the row of a task whose gate has not passed, and do not archive `## Active`,
+    `## Blocked` or `## Open gates` — those are current state, not history.
 
 The bundle is an artefact: counts, codes, dates and hashes. No credential, host, token or personal
 string reaches it.

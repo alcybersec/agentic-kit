@@ -59,6 +59,12 @@ def _covers(glob: str, path: str) -> bool:
 
 ROLE_CEILING = 8
 
+# How long `spine.plan` may grow before the archive operation is overdue. It is read
+# `mode: full` at the start of every session, so an unarchived plan is a cost paid on every
+# prompt for work that finished months ago. Generous: a fresh plan is ~40 lines, and a
+# milestone's worth of Active/Completed rows is tens more.
+PLAN_LINE_BUDGET = 300
+
 # Directories a source-coverage walk must not descend into. §9.1's list, plus the caches
 # and build outputs that would otherwise dominate the report.
 NOISE_DIRS = frozenset({
@@ -181,6 +187,20 @@ def advise(manifest: dict[str, str], cfg: KitConfig,
                     f"{cfg.spine['strategy']} §11, and the graph is expanded past "
                     f"{m0}. A role costs a boundary and a handoff whether or not it "
                     f"does work; leave it out until there is some.")
+    if project_root is not None:
+        plan = project_root / cfg.spine["plan"]
+        try:
+            lines = plan.read_text().count("\n") + 1 if plan.is_file() else 0
+        except OSError:
+            lines = 0
+        if lines > PLAN_LINE_BUDGET:
+            out.append(
+                f"{cfg.spine['plan']} is {lines} lines, past the {PLAN_LINE_BUDGET} this "
+                f"kit budgets for it. It is in `load_order` at `mode: full`, so every line "
+                f"is read at the start of every session — an unarchived plan charges every "
+                f"prompt for work that is finished. /gate-check archives a milestone's "
+                f"Completed rows on PASS; run it, or move them by hand.")
+
     # The disk half, skipped without a root for the same reason verify() skips its own:
     # with nothing to look at, "no role owns this" cannot be distinguished from "this
     # directory does not exist".

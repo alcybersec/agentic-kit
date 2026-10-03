@@ -224,6 +224,22 @@ else
   fi
 fi
 
+# A project may gitignore `.claude/` and `CLAUDE.md` — a reasonable choice, and the first
+# real retrofit target does exactly that. The consequence is not obvious: nothing the kit
+# renders is committed, so the role cards, the lock and the profile do not travel to
+# another worktree or another machine, and `memory: project` does not mean "shared" there.
+if command -v git >/dev/null 2>&1 && git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+  ignored=""
+  for f in .claude/kit.lock.json CLAUDE.md; do
+    git -C "$root" check-ignore -q "$f" 2>/dev/null && ignored="$ignored $f"
+  done
+  if [ -n "$ignored" ]; then
+    note "kit files are committed" "gitignored here:${ignored}. That is a legitimate choice, and it means nothing the kit renders travels: every worktree needs its own render, another machine gets none of it, and \`memory: project\` is per-checkout rather than shared. Nothing to fix if that is what you want."
+  else
+    ok "kit files are committed" "the rendered kit travels with the repository"
+  fi
+fi
+
 # --- what an unattended continue needs ------------------------------------
 # When a usage limit stops Claude mid-task, Claude Code waits and continues the task
 # itself after the reset -- but the continued turn asks for permissions as usual, and an
