@@ -169,6 +169,24 @@ kit_drop_templates() {
   [ "${#KIT_CANDS[@]}" -gt 0 ]
 }
 
+# kit_ask <reason> — escalate to the user instead of refusing.
+#
+# The ONLY place this kit uses the stdout decision object, and the reason is that there
+# is no alternative: fix 0.2 moved denials to prose + `exit 2` because the exit code
+# blocks on its own and there is no schema to get wrong, but "ask" exists *only* as a
+# decision object. So this one branch pays the schema cost — `hookEventName` is required,
+# and `permissionDecisionReason` is what the user reads in the prompt.
+#
+# Use it where the right answer is a human decision rather than a refusal: opening a
+# merge request is not a mistake to prevent, it is an outward-facing act that wants one
+# keystroke of confirmation. Refusing it instead sent the agent on a round trip through a
+# handoff note for something the user would have approved on the spot.
+kit_ask() {
+  jq -nc --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse",
+                        permissionDecision: "ask", permissionDecisionReason: $r}}'
+  exit 0
+}
+
 # kit_deny <reason> — block the tool call, per the Claude Code hook contract.
 #
 # The reason is PROSE on STDERR, and the exit code does the blocking.

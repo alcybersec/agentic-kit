@@ -199,12 +199,15 @@ check_segment() {
         kit_deny "Blocked: recursive forced 'rm' ('rm -rf') cannot be undone. Delete the specific paths with 'rm <file>' (or 'rm -r <dir>' without -f), or, for a build artefact, use the project's clean target (e.g. 'make clean'). Ask the user for anything broader."
       fi ;;
     "$forge_cli")
-      # An MR, a PR, an issue and a release are visible to other people the moment
-      # they exist, and closing or merging one is not undoable from here. The kit's
-      # CLAUDE.md requires the user to take outward-facing actions, but
-      # `Bash(<cli>:*)` in settings.json pre-approved every one of them, so the
-      # agent could open and merge its own MR without a prompt. settings.json now
-      # allows only read verbs (fix 1.4); this is the half that explains itself.
+      # An MR, a PR, an issue and a release are visible to other people the moment they
+      # exist, and closing or merging one is not undoable from here. `Bash(<cli>:*)` in
+      # settings.json pre-approved every one of them, so an agent could open and merge
+      # its own MR without a prompt; the allow-list is read verbs only since fix 1.4.
+      #
+      # ASK, not deny (changed 2026-10-03). A deny is a dead end for this class: the
+      # agent is refused, routes the request through a handoff note, and the user types
+      # the command themselves. What the rule actually wants is confirmation, which is
+      # one keystroke. Denials stay for things that must never happen.
       #
       # Read verbs are untouched: list, view, diff, checks, status.
       local noun="${args[0]:-}" verb="${args[1]:-}"
@@ -212,7 +215,7 @@ check_segment() {
         issue|mr|pr|release)
           case "$verb" in
             create|close|reopen|merge|delete|approve|revoke|edit|update|note|comment)
-              kit_deny "Blocked: '${forge_cli} ${noun} ${verb}' is outward-facing -- it is visible to other people as soon as it runs, and closing or merging is not undoable from here. Put the proposed title, body and target branch in your handoff note and let the user run it. Reading is allowed: '${forge_cli} ${noun} list', 'view', 'diff'." ;;
+              kit_ask "'${forge_cli} ${noun} ${verb}' is outward-facing: it becomes visible to other people the moment it runs, and closing or merging is not undoable from here. Approve it if that is what you want." ;;
           esac ;;
       esac ;;
     docker|docker-compose)

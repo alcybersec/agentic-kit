@@ -340,12 +340,23 @@ def test_the_shared_matcher_does_not_widen_the_block(tmp_path, command):
     "glab release create v1.0.0",
     "glab mr approve 14",
 ])
-def test_a_forge_write_verb_is_blocked(tmp_path, command):
+def test_a_forge_write_verb_asks_the_user(tmp_path, command):
+    """Changed 2026-10-03 from a refusal to an ASK. A deny was a dead end for this class:
+    the agent was refused, routed the request through a handoff note, and the user typed
+    the command themselves. What the rule wants is confirmation, which is one keystroke.
+
+    This is the only place the kit uses the stdout decision object, because "ask" cannot
+    be expressed as an exit code — so the schema is asserted here in full."""
     p = make_project(tmp_path)
     r = run_hook(HOOK, bash_payload(command, p), p)
-    assert r.returncode == 2, (command, r.stdout, r.stderr)
-    assert "outward-facing" in r.stderr
-    assert "handoff note" in r.stderr
+    assert r.returncode == 0, (command, r.stdout, r.stderr)
+    assert r.stderr == "", "the reason travels in the object, not on stderr"
+    out = json.loads(r.stdout)
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse", "required, and silently ignored if wrong"
+    assert hso["permissionDecision"] == "ask"
+    assert "outward-facing" in hso["permissionDecisionReason"]
+    assert set(out) == {"hookSpecificOutput"}, "nothing else belongs on stdout"
 
 
 @pytest.mark.parametrize("command", [
@@ -363,7 +374,7 @@ def test_a_forge_read_verb_is_allowed(tmp_path, command):
     assert r.returncode == 0, (command, r.stderr)
 
 
-def test_the_write_verb_deny_follows_the_configured_forge(tmp_path):
+def test_the_write_verb_prompt_follows_the_configured_forge(tmp_path):
     """`gh pr merge` must block in a github project and `glab mr merge` must not
     be the thing that blocks there — the other CLI is already refused by the
     exclusivity rule, with a different message."""
@@ -372,9 +383,10 @@ def test_the_write_verb_deny_follows_the_configured_forge(tmp_path):
                                       "remote": "git@github.com:o/r.git",
                                       "ci": ".github/workflows/ci.yml"})
     r = run_hook(HOOK, bash_payload("gh pr merge 3", p), p)
-    assert r.returncode == 2 and "outward-facing" in r.stderr
+    assert r.returncode == 0 and "outward-facing" in r.stdout, (r.stdout, r.stderr)
     r = run_hook(HOOK, bash_payload("gh pr view 3", p), p)
-    assert r.returncode == 0, r.stderr
+    assert r.returncode == 0 and r.stdout == "", r.stderr
+    # The WRONG forge is still a refusal, not a question: there is nothing to approve.
     r = run_hook(HOOK, bash_payload("glab mr merge 3", p), p)
     assert r.returncode == 2 and "forge is github" in r.stderr
 

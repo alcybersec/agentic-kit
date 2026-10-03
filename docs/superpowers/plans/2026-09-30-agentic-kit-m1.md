@@ -1171,7 +1171,7 @@ name: {{ role.name }}
 description: {{ role.description }}
 tools: {{ role.tools | join(', ') }}
 model: {{ role.model }}
-memory: project
+memory: {{ role.memory }}
 ---
 
 You are the **{{ role.name }}** engineer for {{ project.name }}.

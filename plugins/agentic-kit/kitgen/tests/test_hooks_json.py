@@ -12,7 +12,8 @@ def load():
 
 
 def test_every_declared_event_is_one_we_implement():
-    assert set(load()) == {"PreToolUse", "PostToolUse", "SubagentStop"}
+    assert set(load()) == {"PreToolUse", "PostToolUse", "SubagentStop",
+                           "SessionStart"}
 
 
 def test_every_referenced_script_exists_and_is_executable():
@@ -65,3 +66,12 @@ def test_the_file_guard_matcher_covers_every_file_writing_tool():
     file_matcher = next(m for m in matchers if "Read" in m)
     for tool in ("Read", "Edit", "Write", "NotebookEdit", "MultiEdit"):
         assert tool in file_matcher.split("|"), (tool, file_matcher)
+
+
+def test_session_start_is_registered_without_a_matcher():
+    """SessionStart fires once per session, so it takes no matcher — and the kit needs it
+    to: §5.1's drift signal was defined and read by nothing until this hook existed."""
+    entries = load()["SessionStart"]
+    assert len(entries) == 1
+    assert "matcher" not in entries[0], "SessionStart has no tool to match on"
+    assert "session-start.sh" in entries[0]["hooks"][0]["command"]

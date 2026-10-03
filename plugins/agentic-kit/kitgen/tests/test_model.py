@@ -581,3 +581,63 @@ def test_a_non_veto_role_may_run_on_the_cheap_model():
     user's call, and a mechanical wiring role is exactly where the saving lives."""
     roles = [{**MINIMAL["roles"][0], "model": "haiku"}, MINIMAL["roles"][1]]
     assert KitConfig.from_dict({**MINIMAL, "roles": roles}).roles[0].model == "haiku"
+
+
+# --- memory scope, and the tools default (2026-10-03) ------------------------
+
+def test_memory_defaults_to_project():
+    """`project` is `.claude/agent-memory/<role>/` — the same directory the kit renders
+    MEMORY.md into, and the one the ownership guard already partitions per role."""
+    assert [r.memory for r in KitConfig.from_dict(MINIMAL).roles] == ["project"] * 2
+
+
+@pytest.mark.parametrize("scope", ["project", "local"])
+def test_an_accepted_memory_scope(scope):
+    roles = [{**MINIMAL["roles"][0], "memory": scope}, MINIMAL["roles"][1]]
+    assert KitConfig.from_dict({**MINIMAL, "roles": roles}).roles[0].memory == scope
+
+
+def test_memory_user_is_refused():
+    """One directory shared across every project on the machine: a fact learned about one
+    codebase would be presented as true of another, and the ownership guard only governs
+    paths inside this project."""
+    roles = [{**MINIMAL["roles"][0], "memory": "user"}, MINIMAL["roles"][1]]
+    with pytest.raises(ConfigError, match="may not use memory: 'user'"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+@pytest.mark.parametrize("scope", ["Project", "shared", "", "none"])
+def test_an_unresolvable_memory_scope_is_rejected(scope):
+    roles = [{**MINIMAL["roles"][0], "memory": scope}, MINIMAL["roles"][1]]
+    with pytest.raises(ConfigError, match="memory"):
+        KitConfig.from_dict({**MINIMAL, "roles": roles})
+
+
+def test_default_tools_cover_the_tools_the_guards_police():
+    """`NotebookEdit` was absent while both the file guard and the ownership guard matched
+    it, so the kit policed a tool its own roles could not use. On a notebook-heavy project
+    a role could not have edited a notebook at all."""
+    from kitgen.model import DEFAULT_TOOLS
+    import json as _json
+    from pathlib import Path as _P
+    matchers = _json.loads(
+        (_P(__file__).resolve().parents[2] / "hooks/hooks.json").read_text()
+    )["hooks"]["PreToolUse"]
+    policed = set()
+    for entry in matchers:
+        policed |= {t for t in entry.get("matcher", "").split("|") if t != "Read"}
+    # Guard broadly, grant narrowly. `MultiEdit` is matched defensively — harmless if the
+    # host has no such tool, the whole guard if it does — but it is deliberately NOT
+    # granted, because listing a tool that may not exist in a role card's frontmatter is
+    # a claim about the host that the kit cannot check. Every tool the kit DOES grant and
+    # police must appear in both.
+    granted = set(DEFAULT_TOOLS)
+    assert policed - granted == {"MultiEdit"}, sorted(policed - granted)
+    assert {"Edit", "Write", "NotebookEdit"} <= policed & granted
+
+
+def test_default_tools_let_a_role_track_multi_step_work():
+    from kitgen.model import DEFAULT_TOOLS
+    assert "TodoWrite" in DEFAULT_TOOLS
+    assert "Agent" not in DEFAULT_TOOLS, (
+        "a role must not dispatch: spawn depth is 1 and only the Orchestrator dispatches")

@@ -115,3 +115,19 @@ def test_ownership_guard_denials_are_prose_on_stderr(tmp_path, fixture, load_fix
             capture_output=True, text=True,
             env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(tmp_path)})
         assert_contract(r, f"ownership-guard/{fixture}/{rel}")
+
+
+def test_an_ask_is_the_only_thing_the_kit_puts_on_stdout(tmp_path):
+    """Two output contracts, each for what it can express. A refusal is prose plus
+    `exit 2`, because the exit code blocks on its own and there is no schema to get
+    wrong. An ASK exists only as a decision object, so that one branch uses stdout —
+    and nothing else may, since Claude Code parses whatever is there as a decision."""
+    p = project(tmp_path)
+    r = run_hook("pre-bash-guard.sh", bash_payload("glab mr create -t x", p), p)
+    assert r.returncode == 0
+    assert r.stderr == ""
+    obj = json.loads(r.stdout)
+    assert obj["hookSpecificOutput"]["permissionDecision"] == "ask"
+    # Every refusal keeps the other contract.
+    for label, fire in sorted(DENIALS.items()):
+        assert_contract(fire(p), label)

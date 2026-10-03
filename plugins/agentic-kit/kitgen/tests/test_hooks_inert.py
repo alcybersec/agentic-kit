@@ -6,8 +6,10 @@ import pytest
 
 from .hooks_conftest import HOOKS, bash_payload, file_payload, run_hook
 
-ALL_HOOKS = ["pre-bash-guard.sh", "pre-file-guard.sh",
-             "post-edit-format.sh", "subagent-stop-check.sh"]
+# Every shipped hook, not a hand-kept subset: the ownership guard and the session-start
+# hook were added later and the blast-radius rule applies to them identically.
+ALL_HOOKS = ["pre-bash-guard.sh", "pre-file-guard.sh", "post-edit-format.sh",
+             "subagent-stop-check.sh", "ownership-guard.sh", "session-start.sh"]
 
 
 @pytest.fixture

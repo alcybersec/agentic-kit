@@ -17,7 +17,20 @@ MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
 # a full ID the kit does not recognise is allowed anywhere, because guessing a stranger's
 # capability is worse than trusting the person who typed it.
 CHEAP_MODELS = frozenset({"haiku"})
-DEFAULT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Skill"]
+# `NotebookEdit` was absent while BOTH guards matched it, so the kit policed a tool its
+# own roles could not use — harmless until someone installs this on a notebook-heavy
+# project, where a role then cannot edit a notebook at all. `TodoWrite` was absent too,
+# which left a role working a multi-step task with no way to track it. Neither was a
+# decision; both are per-role overridable.
+DEFAULT_TOOLS = ["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "Bash",
+                 "Skill", "TodoWrite"]
+
+# Where a role's `memory: ` directory lives. `project` is `.claude/agent-memory/<role>/`,
+# which is exactly where the kit renders MEMORY.md — the kit's convention and Claude
+# Code's own subagent memory are the same directory by design. `local` puts it in
+# `.claude/agent-memory-local/` instead, for memory you would rather not commit, and
+# `user` shares it across every project, which defeats per-project ownership.
+MEMORY_SCOPES = ("project", "local", "user")
 
 
 class ConfigError(ValueError):
@@ -78,7 +91,7 @@ def _overlaps(a: str, b: str) -> bool:
 
 
 _ROLE_KEYS = {"name", "description", "owns", "handoff_extra", "tools", "veto",
-              "model"}
+              "model", "memory"}
 _MAPPING_SECTIONS = ("attribution", "spine", "milestones", "test_tiers",
                      "toolchain")
 _LIST_SECTIONS = ("load_order", "roles", "floors", "secrets")
@@ -125,6 +138,12 @@ class Role:
     # contract-first required to exist before it was dispatched, which is the condition
     # under which a cheaper model is reasonable.
     model: str = "inherit"
+    # `project` keeps a role's memory in the repository, where the ownership guard already
+    # keeps each role out of the others'. `local` is for a project that would rather not
+    # commit it. Hardcoded until 2026-10-03, which was an unexamined default rather than
+    # a decision — the kit renders MEMORY.md into the `project` location either way, so
+    # choosing `local` means the index is committed and the facts beside it are not.
+    memory: str = "project"
 
 
 @dataclass(frozen=True)
@@ -189,6 +208,7 @@ class KitConfig:
                 tools=list(r.get("tools", DEFAULT_TOOLS)),
                 veto=r.get("veto", False),
                 model=r.get("model", "inherit"),
+                memory=r.get("memory", "project"),
             )
             for r in d["roles"]
         ]
@@ -321,6 +341,21 @@ class KitConfig:
                     f"value Claude Code cannot resolve is not reported until the "
                     f"subagent is dispatched — which is mid-task, with a role card "
                     f"already written and a task already assigned.")
+
+        for role in self.roles:
+            if role.memory not in MEMORY_SCOPES:
+                raise ConfigError(
+                    f"role {role.name!r} memory {role.memory!r} is not one of "
+                    f"{list(MEMORY_SCOPES)}. A value Claude Code cannot resolve is not "
+                    f"reported until the subagent is dispatched.")
+            if role.memory == "user":
+                raise ConfigError(
+                    f"role {role.name!r} may not use memory: 'user'. That shares one "
+                    f"directory across every project on the machine, so a fact learned "
+                    f"about one codebase would be presented as true of another — and the "
+                    f"ownership guard, which keeps each role out of the others' memory, "
+                    f"only governs paths inside this project. Use 'project' (committed, "
+                    f"the default) or 'local' (not committed).")
 
         # The one combination the kit refuses. The veto role produces the Floors
         # dimension of every gate and signs it APPROVE or VETO, which the Orchestrator

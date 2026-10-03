@@ -324,6 +324,7 @@ the same worktree lesson is recorded twice in this user's notes.
 | `pre-bash-guard` | PreToolUse/Bash | `git add -A`, `git add .`, `git commit -a`, `git stash`; the non-chosen forge CLI when `forge.exclusive`; `rm -rf`, `docker compose down -v`, `git push --force`/`-f`, `git reset --hard`; a `git commit -m` message matching `/co-authored-by:.*(claude\|anthropic)\|generated (with\|by).*(claude\|anthropic)\|🤖/i` when `attribution.mention_assistant_in_commits` is false |
 | `pre-file-guard` | PreToolUse/Read,Edit,Write,NotebookEdit | any `.tool_input.file_path` matching `secrets`, by its own name **and** by its `realpath` target, so a symlink and a `..` traversal are both caught |
 | `post-edit-format` | PostToolUse/Edit,Write | — runs `toolchain.format` on the edited file, and **never fails a tool call** |
+| `session-start` | SessionStart | nothing — it blocks nothing. It prints into context: the kit version, roster size and milestone; the in-flight task **read from `spine.plan`** rather than asserted; the open-risk count; and two warnings nothing else surfaced automatically — §5.1's drift signal (`mtime(kit.yaml) > mtime(lock)`, meaning the hooks are enforcing a profile you have since edited) and a guard script left over from a render before plugin 1.1.0. Plain stdout, which Claude Code adds to context, so there is no schema to get wrong |
 | `ownership-guard` | PreToolUse/Edit,Write,NotebookEdit,MultiEdit | a role writing a path another role owns, a `critical` path, or any of the files enforcement itself depends on. Role from the payload's `agent_type`; no `agent_type` (the Orchestrator) or an unknown one exits 0. See §6.4 |
 | `subagent-stop-check` | SubagentStop | a subagent returning with no handoff note, read from `last_assistant_message`, the subagent's own `agent_transcript_path`, or a `SubagentHandback` call's `input` — any one of the three satisfies it |
 
@@ -504,6 +505,8 @@ afterthought. Measured on devbox, 20 runs each, against a floor of ~20 ms for `b
 | Edit / Write | `pre-file-guard`, `ownership-guard`, `post-edit-format` | 70 ms | **299 ms** (was 528) |
 | Grep, Glob, Task, WebFetch | none | 0 | 0 |
 
+`session-start` fires once per session, so it is not on the hot path and is not counted above.
+
 **The rule that gets it there: one `jq` pass per input, never one per question.** The guards asked jq
 up to fourteen separate questions each — `kit_q` and `kit_in` are a process per call — which cost 308 ms
 on an `Edit` in the ownership guard alone. `kit_read_nul` reads a whole fixed-order record from a single
@@ -542,6 +545,23 @@ is pinned for the same reason, since a typo there only warns.
 
 A clean `claude plugin validate` therefore means the manifest parses and the events are real. It does
 **not** mean the hooks fire. That needs a live session with the plugin installed, which is Task 17.
+
+### 6.2c Two output contracts, one for what each can express (added 2026-10-03)
+
+A **refusal** is prose on stderr plus `exit 2`. The exit code blocks on its own, so there is no schema
+to get wrong — fix 0.2's reasoning, and it still holds for everything that must never happen: staging
+sweeps, `rm -rf`, a secret path, a cross-role write, the wrong forge.
+
+An **ask** is the stdout decision object, because it cannot be expressed any other way:
+`{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+"permissionDecisionReason": …}}`, exit 0. One branch uses it — the outward-facing forge verbs
+(`create`, `close`, `merge`, …) — and that branch is the reason the distinction exists. Fix 1.4 made
+them a refusal, which was a dead end: the agent was refused, routed the request through a handoff note,
+and the user typed the command themselves. What the rule wanted was confirmation, which is one
+keystroke. `ask` is also the one thing a `settings.json` tier could express and the kit never used.
+
+Nothing else may write to stdout, since Claude Code parses whatever is there as a decision —
+`test_hook_output_contract.py` asserts stdout is empty on every refusal path and valid on the one ask.
 
 ### 6.3 Forge neutrality (normative)
 
