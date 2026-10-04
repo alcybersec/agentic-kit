@@ -11,6 +11,7 @@ itself needs to be shown failing: a check that cannot fail is worth nothing here
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -204,7 +205,7 @@ def test_a_kit_version_behind_the_plugin_is_a_note_not_a_failure(tmp_path, load_
     r = doctor(root)
     assert "kit version" in r.stdout
     assert "note" in r.stdout
-    assert f"installed plugin is {plugin_ver}" in r.stdout
+    assert f"the plugin running this check is {plugin_ver}" in r.stdout
     assert "FAIL" not in r.stdout, r.stdout
     assert r.returncode == 0
 
@@ -319,3 +320,96 @@ def test_auto_continue_turned_off_is_reported(tmp_path, load_fixture):
     assert "auto-continue at usage limit" in r.stdout
     assert "turned off in" in r.stdout
     assert r.returncode == 1, "this one IS a failure: it removes an assumed mechanism"
+
+
+# --- is this the copy that actually fires? ----------------------------------
+# Claude Code loads the plugin from ~/.claude/plugins/cache, not from a checkout.
+# Every other check in the doctor fires THIS script's siblings, so a green run from
+# a working copy says nothing about the installed plugin. On 2026-10-04 the old
+# wording -- "installed plugin is 1.10.0" -- read as proof the install was current
+# while it sat four releases behind at 1.6.0, and every conclusion drawn from that
+# run was about code that was not running. These three tests pin the distinction.
+
+def fake_cache(home, versions):
+    """Build ~/.claude/plugins/cache/agentic-kit/agentic-kit/<v>/ under `home`.
+
+    A path may be a real directory with its own plugin.json, or a symlink to the
+    plugin this repository ships — which is how "the copy you ran IS the live one"
+    is expressed without installing anything.
+    """
+    cache = home / ".claude/plugins/cache/agentic-kit/agentic-kit"
+    cache.mkdir(parents=True)
+    for v, target in versions.items():
+        if target is None:
+            d = cache / v / ".claude-plugin"
+            d.mkdir(parents=True)
+            (d / "plugin.json").write_text(
+                json.dumps({"name": "agentic-kit", "version": v}))
+        else:
+            (cache / v).symlink_to(target)
+    return cache
+
+
+def doctor_with_home(root, home, plugin=None):
+    script = (plugin / "bin/kit-doctor.sh") if plugin else DOCTOR
+    return subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                          env={"PATH": "/usr/bin:/bin", "HOME": str(home),
+                               "CLAUDE_PROJECT_DIR": str(root)})
+
+
+def test_running_a_checkout_while_a_different_version_is_installed_is_reported(
+        tmp_path, load_fixture):
+    root = install(tmp_path / "proj", load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_cache(home, {"2.0.0": None})
+    r = doctor_with_home(root, home)
+    assert "this is the live copy" in r.stdout
+    assert "NO --" in r.stdout
+    assert "2.0.0" in r.stdout
+    # A note, not a FAIL: which copy you meant to run is a judgement call, and the
+    # doctor cannot tell a deliberate pre-install check from an accident.
+    assert "FAIL" not in r.stdout, r.stdout
+    assert r.returncode == 0
+
+
+def test_running_the_installed_copy_draws_no_note(tmp_path, load_fixture):
+    import json as _json
+    root = install(tmp_path / "proj", load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    home.mkdir()
+    ver = _json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text())["version"]
+    # Symlinked, so the resolved path is the plugin itself: `pwd -P` must see through it.
+    fake_cache(home, {ver: PLUGIN})
+    r = doctor_with_home(root, home)
+    assert f"this is the live copy              ok      {ver}" in r.stdout, r.stdout
+    assert r.returncode == 0
+
+
+def test_no_install_at_all_says_the_run_reflects_nothing(tmp_path, load_fixture):
+    """The checks still ran and are still true of the checkout — what is absent is any
+    reason to believe they describe what Claude Code would load."""
+    root = install(tmp_path / "proj", load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    r = doctor_with_home(root, home)
+    assert "no installed copy found" in r.stdout
+    assert "FAIL" not in r.stdout, r.stdout
+    assert r.returncode == 0
+
+
+def test_the_newest_install_is_chosen_by_mtime_not_by_version_string(tmp_path,
+                                                                    load_fixture):
+    """`1.10.0` sorts BEFORE `1.9.0` as a string. The status-line shim in the README
+    already had to learn this; the doctor resolves the same cache and must agree."""
+    root = install(tmp_path / "proj", load_fixture("python_monolith"))
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = fake_cache(home, {"1.9.0": None, "1.10.0": None})
+    now = time.time()
+    for i, v in enumerate(("1.9.0", "1.10.0")):
+        t = now + i
+        os.utime(cache / v / ".claude-plugin/plugin.json", (t, t))
+    r = doctor_with_home(root, home)
+    assert "1.10.0" in r.stdout, r.stdout
+    assert "loads 1.9.0" not in r.stdout, r.stdout

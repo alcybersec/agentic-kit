@@ -143,9 +143,38 @@ fi
 plugin_ver=$(jq -r '.version // empty | strings' "$plugin/.claude-plugin/plugin.json" 2>/dev/null)
 kit_ver=$(jq -r '.kit_version // empty | strings' "$lock" 2>/dev/null)
 if [ -n "$plugin_ver" ] && [ -n "$kit_ver" ] && [ "$plugin_ver" != "$kit_ver" ]; then
-  note "kit version" "profile pins ${kit_ver}, installed plugin is ${plugin_ver} -- generated files may predate the plugin. Re-render, and set kit_version in .claude/kit.yaml if you did not mean to pin it."
+  note "kit version" "profile pins ${kit_ver}, the plugin running this check is ${plugin_ver} -- generated files may predate it. Re-render, and set kit_version in .claude/kit.yaml if you did not mean to pin it."
 elif [ -n "$kit_ver" ]; then
   ok "kit version" "$kit_ver"
+fi
+
+# Which copy is this? Every check above fires THIS script's siblings, and when the
+# doctor is run from a git working copy those are not the hooks Claude Code will
+# invoke -- it loads the installed copy under ~/.claude/plugins/cache. So a green
+# run from a checkout says nothing about the installed plugin, and the old wording
+# ("installed plugin is X") actively asserted the opposite. On 2026-10-04 that read
+# as proof the install was current while it sat four releases behind, and every
+# conclusion drawn from the run was about code that was not running.
+#
+# Newest by mtime, not by version string: 1.10.0 sorts before 1.9.0. Same idiom as
+# the status-line shim in the README, for the same reason.
+newest=""
+for cand in "${HOME:-/nonexistent}"/.claude/plugins/cache/agentic-kit/agentic-kit/*/.claude-plugin/plugin.json; do
+  [ -f "$cand" ] || continue
+  [ -z "$newest" ] || [ "$cand" -nt "$newest" ] || continue
+  newest="$cand"
+done
+if [ -z "$newest" ]; then
+  note "this is the live copy" "no installed copy found under ~/.claude/plugins/cache/agentic-kit -- so this run exercised ${plugin_ver:-an unknown version} from a checkout, and nothing here reflects what Claude Code would load. Install the plugin to make these checks mean something."
+else
+  newest_ver=$(jq -r '.version // empty | strings' "$newest" 2>/dev/null)
+  this_dir=$(cd "$plugin" 2>/dev/null && pwd -P)
+  live_dir=$(cd "${newest%/.claude-plugin/plugin.json}" 2>/dev/null && pwd -P)
+  if [ -n "$this_dir" ] && [ "$this_dir" = "$live_dir" ]; then
+    ok "this is the live copy" "${plugin_ver:-?}"
+  else
+    note "this is the live copy" "NO -- these checks ran ${plugin_ver:-?} from ${this_dir:-$plugin}, but Claude Code loads ${newest_ver:-?} from ${live_dir}. The result describes the copy you ran, not the one that fires. Run the installed one, or \`claude plugin update agentic-kit@agentic-kit\` if the install is the stale side."
+  fi
 fi
 
 # --- the per-role ownership guard ------------------------------------------
