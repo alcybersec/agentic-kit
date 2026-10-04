@@ -102,6 +102,42 @@ whose `CLAUDE.md` or `settings.json` you care about; `/kit-init` does.
 (orphans, living documents missing sections the templates now render, a role with no design section),
 re-render, verify.
 
+### Moving a kit to another checkout, and the state that will not survive it
+
+`.claude/` is gitignored in many projects. Where it is, two things live there that exist **nowhere
+else**:
+
+- `.claude/kit.yaml` — the profile. The roster and the ownership map: the one part of an install a
+  tool cannot reconstruct, because it was your decision.
+- `.claude/agent-memory/**` — what each role has learned. On a real milestone this is the most
+  valuable thing in the directory, and the roles write files there you never asked for.
+
+**`git worktree remove` deletes both without a word**, and so does deleting the directory. That is
+not a bug in git; it is what untracked means. Archive before you move:
+
+```bash
+tar czf ~/kit-state-$(date +%Y%m%d).tar.gz .claude      # verify it before you trust it:
+tar xzf ~/kit-state-*.tar.gz -C /tmp/verify && diff -r /tmp/verify/.claude .claude
+```
+
+Then, in the destination checkout:
+
+```bash
+tar xzf ~/kit-state-*.tar.gz -C . .claude/kit.yaml .claude/agent-memory
+uv run --project <kitgen> kitgen render --profile .claude/kit.yaml --out . --force --merge
+```
+
+`--force` is required and safe here: the render **keeps** every document the project has written and
+every role memory, naming them on stderr (`keeping 15 existing file(s) the project owns`), and
+rewrites only the role cards, the lock and the manifest. Without `--force` it exits 3 and writes
+nothing, because those files already exist — read that refusal as confirmation, not an obstacle.
+
+**Order matters when the spine is tracked but `.claude/` is not.** The spine documents under `docs/`
+are ordinary tracked files; the kit's own config is not. So commit the spine in the source checkout
+*first*. Render into the destination before merging, and the scaffolding it writes becomes untracked
+files at the same paths the merge then wants — the merge aborts with *"untracked working tree files
+would be overwritten"*. Commit, merge, then render.
+
 ### Which model each role runs on
 
 `roles[].model` in the profile, defaulting to `inherit`. What the fixtures ship, and what `/kit-init`
