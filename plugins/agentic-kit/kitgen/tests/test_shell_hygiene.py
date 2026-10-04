@@ -99,6 +99,30 @@ def test_a_hook_reads_nul_delimited_fields_not_lines(path):
     assert '"\\u0000"' in code or '"\u0000"' in code, "fields must be NUL-delimited"
 
 
+@pytest.mark.parametrize("path", ALL_SHELL, ids=lambda p: p.name)
+def test_stderr_is_silenced_before_an_output_redirect_not_after(path):
+    """`cmd > "$f" 2>/dev/null` does NOT silence the failure of `> "$f"`.
+
+    Bash applies redirections left to right, so when `$f` is unwritable the failure is
+    reported while stderr is still the real one and bash prints "No such file or
+    directory" to it. In kit-usage-probe.sh that stderr was the status line the probe
+    rides on: any unwritable snapshot path put a line of shell error text into it.
+    `2>/dev/null` first leaves the failed redirect nowhere to complain, and the `if`
+    still sees the non-zero status.
+
+    Found on 2026-10-04 by a test for an unrelated bug, which is the only reason anyone
+    looked: the leak needs an unwritable target, and the happy path never has one.
+    """
+    body = path.read_text()
+    for n, line in enumerate(body.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        if re.search(r'>>?\s*"?\$\{?\w[^"\s]*"?\s+2>\s*/dev/null', line):
+            pytest.fail(f"{path.name}:{n}: stderr is silenced AFTER the output redirect, "
+                        f"so a failing redirect still prints. Put `2>/dev/null` first: "
+                        f"{line.strip()}")
+
+
 def test_shellcheck_is_clean_across_every_shipped_script():
     """One run over all of them, because shellcheck's cross-file view is the point:
     `-x` follows the `source lib/kitlock.sh` so a helper's variables are not reported

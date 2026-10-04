@@ -332,3 +332,37 @@ def test_the_readme_shim_forwards_arguments(tmp_path):
                        capture_output=True, text=True,
                        env={"PATH": "/usr/bin:/bin", "HOME": str(home)})
     assert r.stdout == "--print", "--print must reach the probe or the segment never shows"
+
+
+def test_the_probe_survives_an_unset_home():
+    """`set -u` plus a bare `${HOME}` is an abort, and an abort here is not silent: it
+    prints "HOME: unbound variable" to stderr, which the documented wiring puts into the
+    user's status line. hooks/usage-gate.sh learned this on 2026-10-03 and the sensor
+    half had not; measured against the installed 1.10.2 before it was fixed.
+
+    No `CLAUDE_KIT_USAGE_FILE` here, deliberately. Setting it short-circuits the `:-`
+    default so `${HOME}` is never expanded and the defect cannot show — which is exactly
+    how the first version of this test passed against the unfixed script. The fallback
+    path is unwritable, and every write in the probe is guarded, so rc 0 with an empty
+    stderr is the whole assertion.
+    """
+    r = subprocess.run(
+        ["bash", str(PROBE)],
+        input='{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":99999999999}}}',
+        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert r.stderr == "", r.stderr
+
+
+def test_the_readme_wires_the_probe_with_a_herestring_not_a_pipe():
+    """The probe exits before reading stdin when jq is absent, so a pipe leaves the
+    writer holding a SIGPIPE and the pipeline reports 141 under `set -o pipefail`.
+    `test_shell_hygiene` forbids that idiom in every script this kit ships; the README
+    told the reader to do it anyway, which is worse than an internal slip because it
+    propagates into files the kit will never see again.
+    """
+    readme = (PLUGIN.parents[1] / "README.md").read_text()
+    start = readme.index("# after you have read stdin into")
+    line = readme[start:readme.index("```", start)]
+    assert "<<<" in line, line
+    assert "| bash" not in line, line

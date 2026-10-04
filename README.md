@@ -200,10 +200,18 @@ and it avoids sorting `1.10.0` against `1.9.0`. Then one line in your status lin
 
 ```bash
 # after you have read stdin into "$input":
-printf '%s' "$input" | bash "$HOME/.claude/kit-usage-probe.sh"
+bash "$HOME/.claude/kit-usage-probe.sh" <<<"$input" >/dev/null 2>&1 || true
 ```
 
-The probe prints nothing, so it cannot disturb your layout; `--print` gives a `5h 23% 7d 41%` segment.
+A **herestring, not a pipe.** The probe exits before reading stdin when `jq` is missing, so
+`printf ... | bash probe.sh` leaves the writer holding a SIGPIPE, and under a status line's
+`set -o pipefail` that pipeline reports 141 — measured, not theorised. The same idiom has cost
+this kit two working guards, which is why `test_shell_hygiene` forbids it in every shipped
+script; the wiring line should not ask you to do what the kit refuses to do itself.
+
+The redirect and the `|| true` are belt and braces: the probe prints nothing and returns 0 on
+every path it is meant to take, and a sensor still should not be *able* to disturb the line it
+rides on. `--print` gives a `5h 23% 7d 41%` segment if you want one.
 
 **Nothing to configure for an API key.** `rate_limits` appears only for claude.ai Pro and Max, so its
 absence *is* the API-key case: no snapshot, no pause, no detection needed.

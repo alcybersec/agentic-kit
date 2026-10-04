@@ -7,7 +7,7 @@
 #     --profile .claude/kit.yaml --out . --dry-run
 # and read the output before running it without --dry-run.
 
-kit_version: 1.10.2
+kit_version: 1.10.3
 rendered_on: "2026-10-03"        # a profile field, not the clock: the renderer is pure
 
 project:

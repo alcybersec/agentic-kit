@@ -26,7 +26,11 @@
 set -uo pipefail
 
 command -v jq >/dev/null 2>&1 || exit 0
-out="${CLAUDE_KIT_USAGE_FILE:-${HOME}/.claude/kit-usage.json}"
+# `${HOME:-...}`, not `${HOME}`: under `set -u` an unset HOME aborts the script, and
+# the abort is not silent -- it prints "HOME: unbound variable" to stderr, which the
+# documented wiring puts straight into the user's status line. hooks/usage-gate.sh
+# paid for this lesson on 2026-10-03; the sensor half had not learned it.
+out="${CLAUDE_KIT_USAGE_FILE:-${HOME:-/nonexistent}/.claude/kit-usage.json}"
 want_print=0
 [ "${1:-}" = "--print" ] && want_print=1
 
@@ -56,7 +60,13 @@ fi
 # and must never see a half-written object.
 mkdir -p -- "${out%/*}" 2>/dev/null || true
 tmp="${out}.$$"
-if printf '%s\n' "$snapshot" > "$tmp" 2>/dev/null; then
+# `2>/dev/null` BEFORE the output redirect, and the order is the whole point: bash
+# applies redirections left to right, so with `> "$tmp" 2>/dev/null` the failure of
+# `> "$tmp"` is reported while stderr is still the real one, and bash prints
+# "No such file or directory" into whatever the probe rides on -- the status line.
+# Silencing stderr first means the failed redirect has nowhere to complain, and the
+# `if` still sees the non-zero status. Do not "tidy" these back into source order.
+if printf '%s\n' "$snapshot" 2>/dev/null > "$tmp"; then
   mv -f -- "$tmp" "$out" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null || true
 fi
 
