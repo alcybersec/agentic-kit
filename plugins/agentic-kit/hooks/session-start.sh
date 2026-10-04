@@ -25,11 +25,10 @@ source "$_kit_dir/lib/kitlock.sh" || exit 0
 kit_init
 
 root="${KIT_LOCK%/.claude/kit.lock.json}"
-kit_version=""; plan=""; strategy=""; risks=""; m0=""; nroles=""
-kit_read_nul kit_version plan strategy risks m0 nroles < <(jq -j '
+kit_version=""; plan=""; risks=""; m0=""; nroles=""
+kit_read_nul kit_version plan risks m0 nroles < <(jq -j '
   ((.kit_version? // "") | tostring), "\u0000",
   ((.spine.plan? // "") | tostring), "\u0000",
-  ((.spine.strategy? // "") | tostring), "\u0000",
   ((.spine.risks? // "") | tostring), "\u0000",
   ((.milestones.outline[0].id? // "") | tostring), "\u0000",
   ((.roles | length) | tostring), "\u0000"' "$KIT_LOCK" 2>/dev/null)

@@ -97,3 +97,27 @@ def test_a_hook_reads_nul_delimited_fields_not_lines(path):
         pytest.skip("no single-pass read in this hook")
     assert "jq -j" in code, "kit_read_nul needs `jq -j` emitting NUL after each field"
     assert '"\\u0000"' in code or '"\u0000"' in code, "fields must be NUL-delimited"
+
+
+def test_shellcheck_is_clean_across_every_shipped_script():
+    """One run over all of them, because shellcheck's cross-file view is the point:
+    `-x` follows the `source lib/kitlock.sh` so a helper's variables are not reported
+    as undefined in each caller.
+
+    It found a dead `strategy` read in session-start.sh that no behavioural test could
+    see — the value was parsed out of the lock and never used. Dead fields are worse
+    than untidy here: `kit_read_nul` assigns positionally, so one in the middle of the
+    list is a loaded gun for the next person who adds a field.
+
+    Skipped where shellcheck is not installed, which means a machine without it gets no
+    coverage from this test at all. The CI image has it.
+    """
+    import shutil
+    import subprocess
+
+    exe = shutil.which("shellcheck")
+    if exe is None:
+        pytest.skip("shellcheck not installed")
+    r = subprocess.run([exe, "-x", "-S", "warning", *map(str, ALL_SHELL)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout or r.stderr
