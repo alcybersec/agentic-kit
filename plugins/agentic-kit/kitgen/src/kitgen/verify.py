@@ -76,11 +76,31 @@ NOISE_DIRS = frozenset({
 # What makes a directory a *source* directory rather than documentation or fixtures. Using
 # extensions keeps the signal high: without it the walk reports `docs/`, which the kit
 # leaves unowned on purpose, on every project.
+#: `/kit-init` instructs the installer to leave this unowned, in so many words: "Do not
+#: give one role all of `tests/**`: that blocks every other role from writing a test while
+#: the kit mandates test-first … leave `tests/unit/**` unowned." So an unowned unit tier is
+#: the PRESCRIBED state and advising against it is the kit contradicting its own installer.
+#: Narrow on purpose: `tests/integration` and `tests/e2e` belong to `qa` and the floor tier
+#: to the veto role, so those left unowned are real findings and must still be reported.
+PRESCRIBED_UNOWNED_TAIL = ("tests", "unit")
+
 CODE_SUFFIXES = frozenset({
     ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".go", ".rs", ".rb", ".java",
     ".kt", ".kts", ".php", ".cs", ".swift", ".scala", ".sql", ".sh", ".bash", ".css",
     ".scss", ".vue", ".svelte", ".c", ".cc", ".cpp", ".h", ".hpp", ".ex", ".exs",
 })
+
+
+def _is_prescribed_unowned(rel: str) -> bool:
+    """`rel` IS a prescribed-unowned directory, or lies inside one.
+
+    Inside counts: if `tests/unit` is meant to have no owner then nothing beneath it has
+    one either, so descending to report `tests/unit/services` would reintroduce the same
+    bad advice one level down.
+    """
+    parts = rel.split("/")
+    return any(tuple(parts[i:i + 2]) == PRESCRIBED_UNOWNED_TAIL
+               for i in range(len(parts) - 1))
 
 
 def unowned_source_dirs(cfg: KitConfig, project_root: Path) -> list[str]:
@@ -125,7 +145,7 @@ def unowned_source_dirs(cfg: KitConfig, project_root: Path) -> list[str]:
             entries = sorted(d.iterdir())
         except OSError:
             return
-        if rel and covered(rel):
+        if rel and (covered(rel) or _is_prescribed_unowned(rel)):
             return
         has_code = any(e.is_file() and e.suffix in CODE_SUFFIXES for e in entries)
         if rel and has_code and not contains_owned(rel):

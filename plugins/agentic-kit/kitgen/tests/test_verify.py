@@ -716,3 +716,34 @@ def test_a_fresh_plan_draws_no_advice(load_fixture, tmp_path):
     plan.parent.mkdir(parents=True, exist_ok=True)
     plan.write_text(man[cfg.spine["plan"]])
     assert advise(man, cfg, project_root=tmp_path) == []
+
+
+def test_tests_unit_is_not_reported_because_kit_init_prescribes_leaving_it_unowned(
+        load_fixture, tmp_path):
+    """The check must not advise undoing what the installer instructed.
+
+    `/kit-init` is explicit: "Do not give one role all of `tests/**`: that blocks every
+    other role from writing a test while the kit mandates test-first … leave
+    `tests/unit/**` unowned." So an unowned `tests/unit` is the prescribed state, and
+    reporting it is the kit disagreeing with itself — found on the `study-helper-project`
+    retrofit (2026-10-04), where `services/app/tests/unit` was advised against by the
+    same tool that told the installer to leave it alone.
+
+    Only `unit` is prescribed. `tests/integration` and `tests/e2e` belong to `qa` and the
+    floor tier to the veto role, so those staying unowned IS a real finding and must still
+    be reported — the suppression has to be narrow or it hides the cases that matter.
+    """
+    from kitgen.verify import unowned_source_dirs
+    cfg = load_fixture("python_monolith")      # qa owns tests/integration + tests/e2e
+    _tree(tmp_path, [
+        "tests/unit/test_a.py",                     # prescribed unowned: silent
+        "services/app/tests/unit/test_b.py",        # same, not at the root
+        "tests/unit/services/test_deep.py",         # inside the prescribed tree: silent
+        "services/app/tests/contracts/test_c.py",   # NOT prescribed: a real finding
+    ])
+    found = unowned_source_dirs(cfg, tmp_path)
+    assert "tests/unit" not in found
+    assert "services/app/tests/unit" not in found
+    assert not any("tests/unit" in f for f in found), found
+    assert "services/app/tests/contracts" in found, (
+        "only tests/unit is prescribed unowned; everything else must still be reported")
