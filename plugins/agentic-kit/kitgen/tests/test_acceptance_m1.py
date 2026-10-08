@@ -285,3 +285,35 @@ def test_a_profile_elsewhere_still_renders_the_kit_yaml(tmp_path):
     assert yaml.safe_load((tmp_path / ".claude/kit.yaml").read_text())["project"] == {
         "name": cfg.project.name, "slug": cfg.project.slug,
         "summary": cfg.project.summary}
+
+
+def test_the_readme_does_not_describe_the_pre_1_1_0_guard():
+    """The README claimed the ownership guard was "a rendered per-role guard" that was
+    "skipped entirely until the workspace is trusted". Both stopped being true on
+    2026-10-02, when the guard became a plugin hook reading `agent_type`.
+
+    That pairing is the dangerous kind of stale: it tells a reader the guard is absent in
+    exactly the situations where it does fire, and points at a rendered file that, if it
+    exists at all, is dead. `/kit-doctor` has said the opposite in prose for months, so
+    the two disagreed in writing until 1.10.4.
+    """
+    readme = (Path(__file__).resolve().parents[4] / "README.md")
+    text = " ".join(readme.read_text().split())
+    assert "rendered per-role guard" not in text
+    assert "skipped entirely until the workspace is trusted" not in text
+    # And the correction must be present, not merely the absence of the error.
+    assert "Plugin hooks fire in an untrusted checkout" in text
+    assert "agent_type" in text, "what the guard reads to know the role"
+
+
+def test_the_readme_documents_the_ownership_rules_the_profile_enforces():
+    """`/kit-init` asks for the ownership map in its first turn and the model layer rejects
+    a bad one, so a reader meeting that question for the first time should not have to find
+    the rules in a skill body or a traceback. The extension-partition rejection is the
+    least guessable of them, and `tests/unit` is the one the kit's own advice used to
+    contradict."""
+    readme = (Path(__file__).resolve().parents[4] / "README.md")
+    text = " ".join(readme.read_text().split())
+    assert "literal directory prefixes" in text, "how overlap is actually decided"
+    assert "tests/unit" in text
+    assert "docs/gates" in text

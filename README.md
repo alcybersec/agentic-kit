@@ -138,6 +138,33 @@ are ordinary tracked files; the kit's own config is not. So commit the spine in 
 files at the same paths the merge then wants — the merge aborts with *"untracked working tree files
 would be overwritten"*. Commit, merge, then render.
 
+### The ownership map, and what must stay unowned
+
+The roster and its path ownership map are the one thing `/kit-init` cannot decide for you, and the
+rules below are checked before the profile is accepted, so it is worth knowing them before you are
+asked.
+
+- **No two roles' globs may overlap**, and overlap is decided on **literal directory prefixes**. So
+  `app/**/*.py` for one role against `app/**/*.tsx` for another is **rejected**: extension-partitioned
+  ownership of a single tree is refused by design, because the guard would then depend on a filename
+  to say who may touch a directory. Split by directory, or share it unowned.
+- **Eight roles is the cap.** Each one costs a boundary and a handoff. Beyond that, fold into the
+  nearest of architect / backend / frontend / data / devops.
+- **Never give one role all of `tests/**`.** The kit mandates test-first, so a role that cannot write
+  a test cannot do its job. Give `qa` the integration and e2e subtrees, the veto role its floor tier,
+  and leave **`tests/unit/**` unowned**.
+- **`docs/gates/**` and the contracts file stay unowned.** A gate bundle is written by two roles at
+  once; a contract is written by whoever implements it first.
+
+Unowned is legal and deliberate — it is what keeps the guard usable. An unowned path crosses nobody's
+boundary and every role may write it.
+
+`kitgen verify` adds **advice** about unowned code: the shallowest directory holding source that no
+role owns, because that is where a floor nobody is accountable for tends to live. It is advice, never
+an error, and never changes the exit code. It does **not** report `tests/unit` or anything inside one,
+since leaving that unowned is what the installer told you to do — a tool advising you to undo another
+tool's instruction is worse than silence.
+
 ### Which model each role runs on
 
 `roles[].model` in the profile, defaulting to `inherit`. What the fixtures ship, and what `/kit-init`
@@ -272,14 +299,26 @@ continued. This reduces overrun; it does not guarantee against it.
 `pre-bash-guard` blocks staging sweeps, destructive git, the non-chosen forge CLI, outward-facing
 forge write verbs, and commands naming a secret path. `pre-file-guard` blocks reading or editing a
 secret. `post-edit-format` runs the project formatter on the edited file. `subagent-stop-check`
-blocks a subagent that finishes without a handoff note. A rendered per-role guard enforces path
-ownership.
+blocks a subagent that finishes without a handoff note. `ownership-guard` enforces path ownership,
+reading the role from the hook payload's `agent_type` — so it refuses a cross-role edit and allows
+the main thread, which has no `agent_type` and *is* the Orchestrator.
+
+All of them are **plugin** hooks. That matters for two things people get wrong:
+
+- **Workspace trust does not disable them.** Plugin hooks fire in an untrusted checkout and in `-p`
+  sessions. What trust costs is `permissions.allow`, which an untrusted workspace ignores entirely
+  while keeping `permissions.deny` — so your secrets stay blocked and every toolchain command starts
+  prompting. `/kit-doctor` reports trust for exactly that reason: it is the difference between a
+  session that can continue unattended and one that stalls on its first command.
+- **Nothing per-role is rendered into the project.** Up to plugin 1.1.0 the guard was a script at
+  `.claude/hooks/ownership-guard.sh` registered from each role card's frontmatter. It is not, any
+  more. If you find that file in a project it is dead, it is never invoked, and `/kit-doctor` and
+  `/kit-upgrade` both flag it — a file that looks like an enforcement hook and runs never is worse
+  than no file.
 
 They match **file paths and command strings**, so none of them is a sandbox: an interpreter reaches
-past all of them, and the per-role guard is *skipped entirely* until the workspace is trusted — a
-`-p` session never counts as trusted. Design §6.2 is explicit about every limit; read it before
-relying on any of this as a boundary. These are nudges with good messages for a cooperative agent,
-not containment.
+past all of them. Design §6.2 is explicit about every limit; read it before relying on any of this as
+a boundary. These are nudges with good messages for a cooperative agent, not containment.
 
 ## Forge neutrality
 
