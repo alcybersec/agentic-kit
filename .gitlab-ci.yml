@@ -1,0 +1,108 @@
+# CI for agentic-kit.
+#
+# Every gate here was previously run by hand, which is a poor fit for a project whose
+# whole thesis is that a rule nobody executes is not a rule. One run took 16 minutes
+# locally because four other test suites were competing for the same four cores; that is
+# exactly the work a runner should absorb.
+#
+# Both homelab runners are `run_untagged: false`, so an untagged job queues forever. The
+# tags below are not decoration.
+
+stages:
+  - lint
+  - test
+
+default:
+  tags: [homelab, docker]
+  interruptible: true
+
+# One pipeline per change, not two: without this a branch with an open MR gets both a
+# branch pipeline and an MR pipeline for the same commit.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+variables:
+  UV_CACHE_DIR: $CI_PROJECT_DIR/.cache/uv
+  PYTHONDONTWRITEBYTECODE: "1"
+
+.uv_cache: &uv_cache
+  key:
+    files: [plugins/agentic-kit/kitgen/uv.lock]
+    prefix: uv
+  paths: [.cache/uv]
+
+# `-x` so the `source lib/kitlock.sh` is followed and a helper's variables are not
+# reported undefined in every caller. The suite has its own shellcheck gate, which skips
+# when the binary is absent -- this job is why that skip is acceptable there.
+shell-hygiene:
+  stage: lint
+  image: python:3.12-slim
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends shellcheck findutils
+  script:
+    - shellcheck --version
+    - shellcheck -x -S warning $(find plugins/agentic-kit -name '*.sh')
+
+# The templates and the design document must agree. This is the check that catches a
+# template edited without the spec, or a spec amended without the template.
+plan-sync:
+  stage: lint
+  image: python:3.12-slim
+  script:
+    - python3 scripts/check_plan_sync.py
+
+# NOT equivalent to `claude plugin validate`, which is authoritative and needs the Claude
+# Code CLI. This catches the breakage that actually happens -- unparseable JSON, or a
+# manifest missing a key Claude Code requires -- without pulling a node toolchain into CI.
+manifests:
+  stage: lint
+  image: python:3.12-slim
+  script:
+    - |
+      python3 - <<'PY'
+      import json, pathlib, sys
+      bad = []
+      checks = {
+          ".claude-plugin/marketplace.json": ("name", "plugins"),
+          "plugins/agentic-kit/.claude-plugin/plugin.json": ("name", "version", "description"),
+      }
+      for rel, required in checks.items():
+          p = pathlib.Path(rel)
+          if not p.is_file():
+              bad.append(f"{rel}: missing"); continue
+          try:
+              data = json.loads(p.read_text())
+          except json.JSONDecodeError as e:
+              bad.append(f"{rel}: not valid JSON: {e}"); continue
+          for key in required:
+              if key not in data:
+                  bad.append(f"{rel}: missing required key {key!r}")
+          print(f"ok  {rel}")
+      if bad:
+          print("\n".join(bad), file=sys.stderr); sys.exit(1)
+      PY
+
+# jq and shellcheck must come from apt, not pip: the hook tests hand their subprocesses
+# `PATH=/usr/bin:/bin` and nothing else, which is the point -- it proves the hooks work in
+# a stripped environment. A tool in /usr/local/bin would be invisible to them, and a hook
+# that cannot find jq exits 0 in silence, so the refusal tests would fail with no clue why.
+tests:
+  stage: test
+  image: python:3.12-slim
+  needs: [shell-hygiene, plan-sync, manifests]
+  cache: *uv_cache
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends jq shellcheck git findutils
+    - command -v jq && command -v shellcheck && command -v git
+    - test -x /usr/bin/jq || { echo "jq must be on /usr/bin for the restricted-PATH tests"; exit 1; }
+    - pip install --quiet uv
+  script:
+    - cd plugins/agentic-kit/kitgen
+    # --frozen: CI resolves from uv.lock and never silently updates it.
+    - uv run --frozen pytest -q

@@ -334,7 +334,19 @@ cd plugins/agentic-kit/kitgen
 uv run pytest                      # the whole suite, including the shell guards
 python ../../../scripts/check_plan_sync.py   # templates still match the plan
 claude plugin validate ../..               # manifests
+shellcheck -x -S warning $(find ../../../plugins -name '*.sh')   # every shipped script
 ```
+
+`.gitlab-ci.yml` runs all of that except `claude plugin validate`, which needs the Claude Code CLI;
+CI checks the manifests structurally instead and says so in a comment. Both homelab runners are
+`run_untagged: false`, so every job carries `tags: [homelab, docker]` — an untagged job there queues
+for ever rather than failing.
+
+`jq` and `shellcheck` are installed from apt in CI, not pip, and the pipeline asserts `jq` is on
+`/usr/bin`. The hook tests hand their subprocesses `PATH=/usr/bin:/bin` and nothing else — that is
+the point of them, since it proves a guard works in a stripped environment — so a tool in
+`/usr/local/bin` is invisible to them, and a hook that cannot find `jq` exits 0 in silence. The
+refusal tests would fail with no indication why.
 
 `kitgen.render` is a pure function from a profile to `{path: content}`. It reads nothing from the
 project tree, writes nothing, and never reads the clock — `rendered_on` is a profile field for that
